@@ -1,0 +1,26 @@
+[project]
+name = "fx-explorer"
+version = "0.1.0"
+description = "Import Frankfurter exchange rates into PostgreSQL"
+readme = "README.md"
+authors = [
+    { name = "theangelskies", email = "theangelskies13@yahoo.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "httpx>=0.28.1",
+    "psycopg[binary,pool]>=3.3.9",
+    "pydantic>=2.14.4",
+    "pydantic-settings>=2.16.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "respx>=0.23.1",
+]
