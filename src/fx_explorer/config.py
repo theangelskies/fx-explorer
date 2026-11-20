@@ -1,9 +1,10 @@
 """Application settings, loaded from environment variables and the .env file."""
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -22,7 +23,8 @@ class Settings(BaseSettings):
     max_retries: int = 3
     request_delay_seconds: float = 1
     default_base: str = "EUR"
-    default_quotes: list[str] = ["USD", "GBP", "NGN", "JPY", "CHF", "CAD"]
+    # NoDecode: don't try to read this value as JSON; our validator below splits the commas.
+    default_quotes: Annotated[list[str], NoDecode] = ["USD", "GBP", "NGN", "JPY", "CHF", "CAD"]
 
     @field_validator("default_quotes", mode="before")
     @classmethod
