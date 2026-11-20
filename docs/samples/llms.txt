@@ -1,0 +1,17 @@
+# Frankfurter
+
+> Currency data API. Current and historical exchange rates for 219 currencies and 39 other assets from 112 central banks and official sources.
+
+No authentication required. Open source. Free, with no quotas or monthly caps.
+
+- OpenAPI: https://api.frankfurter.dev/v2/openapi.json
+- Docs: https://frankfurter.dev
+- MCP: https://mcp.frankfurter.dev
+
+## Examples
+
+https://api.frankfurter.dev/v2/rates
+https://api.frankfurter.dev/v2/rate/eur/usd
+https://api.frankfurter.dev/v2/rates?date=1999-01-04&base=usd&quotes=gbp,jpy
+https://api.frankfurter.dev/v2/rates?from=2026-01-01&to=2026-01-31&base=eur&quotes=usd
+https://api.frankfurter.dev/v2/rates?from=2025-01-01&to=2025-12-31&group=month

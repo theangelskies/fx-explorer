@@ -1,0 +1,14 @@
+HTTP/2 422 
+date: Fri, 20 Nov 2026 23:06:06 GMT
+content-type: application/json; charset=utf-8
+content-length: 45
+vary: Origin
+x-robots-tag: noindex
+cache-control: no-store
+cf-cache-status: BYPASS
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=E3dtxskY7xBCcjR8qHSGf9u77Bcvb7WUj6ujskLUTB0cpdkDJzIW2Re%2BkF7RxDE7BgPibwL9xJmmVFUMoZIMPjhJFlnZa3%2BY0qTKENpzrZEtVHwgjpUzf5O49Hu%2BRAe5DaJUHbU%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a5db1a6befd5a5cb-MAD
+
+{"status":422,"message":"conflicting params"}

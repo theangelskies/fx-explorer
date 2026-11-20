@@ -1,0 +1,14 @@
+HTTP/2 422 
+date: Fri, 20 Nov 2026 23:05:53 GMT
+content-type: application/json; charset=utf-8
+content-length: 48
+vary: Origin
+x-robots-tag: noindex
+cache-control: no-store
+cf-cache-status: BYPASS
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=oLbBGjssyz0p%2FBu7SMBPYZOZFwaEd0BqNd5cLJB%2FgB0NNkW7N0zQhpcej19gwG44%2FrmlAP9wf3%2BdMvvAveIH9Cs9QuxupJalQmdRXD8c2NLcAL7Uj4QUFPTBZt0yp6tz5HEwA8Q%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a5db1a1b6f59d5b1-MAD
+
+{"status":422,"message":"invalid currency: XXX"}
