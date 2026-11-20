@@ -10,7 +10,9 @@ from fx_explorer.config import get_settings
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: otherwise running migrations from the tests would
+    # silence our own loggers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # We write plain SQL migrations (no ORM models), so there is no metadata to compare against.
 target_metadata = None

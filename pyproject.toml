@@ -24,3 +24,7 @@ dev = [
     "pytest>=9.2.0",
     "respx>=0.23.1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs the PostgreSQL test database (docker compose up -d)"]
