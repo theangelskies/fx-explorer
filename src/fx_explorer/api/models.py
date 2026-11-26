@@ -29,7 +29,8 @@ def _utc_z(value: datetime) -> str:
 DecimalStr = Annotated[Decimal, PlainSerializer(_decimal_str, return_type=str)]
 UtcDateTime = Annotated[datetime, PlainSerializer(_utc_z, return_type=str)]
 CurrencyType = Literal["currency", "metal", "crypto"]
-Window = Literal["7d", "30d", "90d", "1y"]
+Window = Literal["7d", "30d", "90d", "1y", "3y", "5y", "max"]
+SeriesInterval = Literal["day", "week", "month"]
 
 T = TypeVar("T")
 
@@ -109,15 +110,42 @@ class PairStatsOut(BaseModel):
     avg: DecimalStr
 
 
+class TrendMoveOut(BaseModel):
+    """#/components/schemas/TrendMove"""
+
+    date: date
+    change_pct: DecimalStr
+
+
+class PairTrendOut(BaseModel):
+    """#/components/schemas/PairTrend"""
+
+    period_start: date
+    period_end: date
+    change_abs: DecimalStr
+    change_pct: DecimalStr
+    annualized_change_pct: DecimalStr | None
+    volatility_annualized_pct: DecimalStr | None
+    biggest_rise: TrendMoveOut | None
+    biggest_fall: TrendMoveOut | None
+    moving_average_30: DecimalStr | None
+    moving_average_200: DecimalStr | None
+
+
 class PairDetailOut(BaseModel):
     """#/components/schemas/PairDetail"""
 
     base: str
     quote: str
     window: Window
+    window_start: date
+    series_interval: SeriesInterval
+    first_available_date: date
+    data_points: int
     latest: RatePointOut
     previous: RatePointOut | None
     change_abs: DecimalStr | None
     change_pct: DecimalStr | None
     stats: PairStatsOut | None
+    trend: PairTrendOut | None
     series: list[SeriesPointOut]

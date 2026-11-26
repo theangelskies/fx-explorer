@@ -1,34 +1,53 @@
-"""GET /v1/pairs/{base}/{quote} (getPair)."""
+"""GET /v1/pairs/{base}/{quote} (getPair).
 
-from decimal import Decimal
+The route only connects the pieces: the repository reads the history, analytics/trends.py
+computes the numbers, and the models shape the response exactly as the contract says.
+"""
+
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Path, Query
 
+from fx_explorer.analytics import trends
 from fx_explorer.api.deps import rate_repository
 from fx_explorer.api.errors import ProblemError
 from fx_explorer.api.models import (
     PairDetailOut,
     PairStatsOut,
+    PairTrendOut,
     RatePointOut,
+    SeriesInterval,
     SeriesPointOut,
+    TrendMoveOut,
     Window,
 )
 from fx_explorer.api.params import CODE_PATTERN
-from fx_explorer.repositories.rates import RateRepository
+from fx_explorer.repositories.rates import RatePoint, RateRepository
 
 router = APIRouter(tags=["Pairs"])
 
-WINDOW_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90, "1y": 365}
+# Window lengths in calendar days, ending at (and counting) the latest stored date.
+# None = all stored history. Same numbers as the Window schema in openapi.yaml.
+WINDOW_DAYS: dict[str, int | None] = {
+    "7d": 7, "30d": 30, "90d": 90, "1y": 365, "3y": 1095, "5y": 1825, "max": None,
+}
+# Chart spacing when `interval` is omitted (contract: Interval parameter).
+DEFAULT_INTERVAL: dict[str, str] = {
+    "7d": "day", "30d": "day", "90d": "day", "1y": "day",
+    "3y": "week", "5y": "week", "max": "month",
+}
 
-# Rounding rules from the contract (PairStats.avg, PairDetail.change_pct)
-AVG_PLACES = Decimal("1E-10")  # 10 decimal places
-PCT_PLACES = Decimal("1E-4")  # 4 decimal places
+
+def _points(rows: list[RatePoint]) -> list[trends.Point]:
+    return [(r.rate_date, r.rate) for r in rows]
 
 
-def _round_avg(value: Decimal) -> Decimal:
-    """Round to 10 places, then drop trailing zeros ("1.1051000000" -> "1.1051")."""
-    rounded = value.quantize(AVG_PLACES)
-    return rounded.normalize() if rounded != 0 else rounded
+def _trend_out(t: trends.Trend | None) -> PairTrendOut | None:
+    if t is None:
+        return None
+    move = lambda m: TrendMoveOut(date=m.date, change_pct=m.change_pct) if m else None  # noqa: E731
+    return PairTrendOut(**{**asdict(t), "biggest_rise": move(t.biggest_rise),
+                           "biggest_fall": move(t.biggest_fall)})
 
 
 @router.get("/v1/pairs/{base}/{quote}", response_model=PairDetailOut)
@@ -36,31 +55,34 @@ def get_pair(
     base: str = Path(pattern=CODE_PATTERN),
     quote: str = Path(pattern=CODE_PATTERN),
     window: Window = Query("30d"),
+    interval: SeriesInterval | None = Query(None),
     rates: RateRepository = Depends(rate_repository),
 ) -> PairDetailOut:
-    w = rates.pair_window(base, quote, WINDOW_DAYS[window])
-    if w is None:
+    series_interval = interval or DEFAULT_INTERVAL[window]
+    h = rates.pair_history(base, quote, WINDOW_DAYS[window], series_interval)
+    if h is None:
         # Covers unknown currencies too: either way there is nothing to show (contract: 404).
         raise ProblemError("not-found", f"No rates stored for {base}/{quote}.")
 
-    change_abs = change_pct = None
-    if w.previous is not None:
-        change_abs = w.latest.rate - w.previous.rate  # Decimal subtraction: exact
-        change_pct = (change_abs / w.previous.rate * 100).quantize(PCT_PLACES)
-
-    stats = None
-    if w.stats is not None:
-        stats = PairStatsOut(min=w.stats.min, max=w.stats.max, avg=_round_avg(w.stats.avg))
+    points = _points(h.points)
+    change_abs, change_pct = trends.day_change(
+        h.previous.rate if h.previous else None, h.latest.rate)
+    stats = trends.window_stats(points)
 
     return PairDetailOut(
         base=base,
         quote=quote,
         window=window,
-        latest=RatePointOut(rate_date=w.latest.rate_date, rate=w.latest.rate),
-        previous=(RatePointOut(rate_date=w.previous.rate_date, rate=w.previous.rate)
-                  if w.previous else None),
+        window_start=h.window_start,
+        series_interval=series_interval,
+        first_available_date=h.first_available_date,
+        data_points=len(points),
+        latest=RatePointOut(rate_date=h.latest.rate_date, rate=h.latest.rate),
+        previous=(RatePointOut(rate_date=h.previous.rate_date, rate=h.previous.rate)
+                  if h.previous else None),
         change_abs=change_abs,
         change_pct=change_pct,
-        stats=stats,
-        series=[SeriesPointOut(date=p.rate_date, rate=p.rate) for p in w.series],
+        stats=PairStatsOut(min=stats.min, max=stats.max, avg=stats.avg) if stats else None,
+        trend=_trend_out(trends.compute_trend(points, _points(h.recent))),
+        series=[SeriesPointOut(date=p.rate_date, rate=p.rate) for p in h.series],
     )

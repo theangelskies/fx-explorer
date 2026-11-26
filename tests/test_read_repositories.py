@@ -169,32 +169,56 @@ def test_new_rows_during_paging_do_not_cause_duplicates(data):
 
 # --------------------------------------------------------------------- pairs
 
-def test_pair_window(data):
+def test_pair_history(data):
     _, rates = data
-    w = rates.pair_window("EUR", "USD", days=7)
-    assert w.latest == RatePoint(date(2026, 11, 17), Decimal("1.1005"))
-    assert w.previous == RatePoint(date(2026, 11, 16), Decimal("1.1034"))
-    assert [p.rate_date for p in w.series] == sorted(EUR_USD)  # oldest first
-    assert (w.stats.min, w.stats.max, w.stats.avg) == (
-        Decimal("1.1005"), Decimal("1.1076"), Decimal("1.1051"))
+    h = rates.pair_history("EUR", "USD", days=7)
+    assert h.latest == RatePoint(date(2026, 11, 17), Decimal("1.1005"))
+    assert h.previous == RatePoint(date(2026, 11, 16), Decimal("1.1034"))
+    assert h.first_available_date == date(2026, 11, 13)
+    assert h.window_start == date(2026, 11, 11)  # 17th minus 6 days: a 7-day window
+    assert [p.rate_date for p in h.points] == sorted(EUR_USD)  # oldest first
+    assert h.series == h.points  # interval "day"
+    assert h.recent == h.points  # fewer than 200 stored, so all of them
 
 
-def test_pair_window_ends_at_latest_stored_date(data):
+def test_pair_history_window_ends_at_latest_stored_date(data):
     _, rates = data
-    w = rates.pair_window("EUR", "USD", days=2)  # 16th and 17th only
-    assert [p.rate_date for p in w.series] == [date(2026, 11, 16), date(2026, 11, 17)]
-    assert w.series[0].rate_date == w.latest.rate_date - timedelta(days=1)
+    h = rates.pair_history("EUR", "USD", days=2)  # 16th and 17th only
+    assert [p.rate_date for p in h.points] == [date(2026, 11, 16), date(2026, 11, 17)]
+    assert len(h.recent) == 5  # moving averages may look before the window
 
 
-def test_pair_with_single_rate_has_no_previous(data):
+def test_pair_history_max_starts_at_first_available(data):
     _, rates = data
-    w = rates.pair_window("EUR", "XAU", days=30)
-    assert w.previous is None
-    assert w.stats.min == w.stats.max == w.stats.avg == Decimal("0.00029946")
+    h = rates.pair_history("EUR", "USD", days=None)
+    assert h.window_start == h.first_available_date == date(2026, 11, 13)
+    assert len(h.points) == 5
+
+
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        # 13 (Fri), 14 (Sat), 15 (Sun) are in one ISO week, 16 (Mon) and 17 (Tue) in the next:
+        # the last rate of each week is kept.
+        ("week", [(date(2026, 11, 15), Decimal("1.1068")), (date(2026, 11, 17), Decimal("1.1005"))]),
+        ("month", [(date(2026, 11, 17), Decimal("1.1005"))]),  # all in November
+    ],
+)
+def test_pair_history_downsampling_keeps_last_rate_per_period(data, interval, expected):
+    _, rates = data
+    h = rates.pair_history("EUR", "USD", days=None, interval=interval)
+    assert [(p.rate_date, p.rate) for p in h.series] == expected
+    assert len(h.points) == 5  # stats/trend still get every daily rate
+
+
+def test_pair_history_rejects_unknown_interval(data):
+    _, rates = data
+    with pytest.raises(ValueError):
+        rates.pair_history("EUR", "USD", days=7, interval="year")
 
 
 def test_pair_without_data(data):
     _, rates = data
-    assert rates.pair_window("USD", "GBP", days=30) is None  # no cross rates
+    assert rates.pair_history("USD", "GBP", days=30) is None  # no cross rates
     assert rates.has_pair("EUR", "USD") is True
     assert rates.has_pair("USD", "EUR") is False

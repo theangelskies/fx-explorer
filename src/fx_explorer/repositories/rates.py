@@ -59,21 +59,21 @@ class RatePoint:
 
 
 @dataclass(frozen=True)
-class PairStats:
-    min: Decimal
-    max: Decimal
-    avg: Decimal  # NOT rounded here; how many decimals to show is the API's decision
-
-
-@dataclass(frozen=True)
-class PairWindow:
-    """Everything the pair-detail view needs, read in one go."""
+class PairHistory:
+    """Everything the pair-detail view needs, read in one go. Lists are oldest first."""
 
     latest: RatePoint
     previous: RatePoint | None  # the stored rate just before `latest`
-    series: list[RatePoint]  # oldest first, within the window
-    stats: PairStats | None  # None only if series is empty
+    first_available_date: date  # earliest stored rate for the pair
+    window_start: date  # first date the window asks for
+    points: list[RatePoint]  # every daily rate in window_start..latest
+    recent: list[RatePoint]  # the last (up to) 200 rates up to latest, for moving averages
+    series: list[RatePoint]  # chart points: daily, or last rate per week/month
 
+
+# date_trunc units for down-sampling. Fixed strings only: they are put into the SQL text
+# (DISTINCT ON and ORDER BY must contain the exact same expression), never user input.
+_TRUNC_UNITS = {"week": "week", "month": "month"}  # PostgreSQL weeks are ISO: Monday-Sunday
 
 class RateRepository:
     def __init__(self, pool: ConnectionPool) -> None:
@@ -190,11 +190,19 @@ class RateRepository:
             ).fetchone()
         return row[0]
 
-    def pair_window(self, base: str, quote: str, days: int) -> PairWindow | None:
-        """Latest + previous rate, and the series/stats for the `days` calendar days that end
-        at the latest stored date (inclusive). None if the pair has no stored rates."""
-        point = class_row(RatePoint)
+    def pair_history(
+        self, base: str, quote: str, days: int | None, interval: str = "day"
+    ) -> PairHistory | None:
+        """History for the pair-detail view. None if the pair has no stored rates.
+
+        days: window length in calendar days ending at the latest stored date (inclusive);
+              None = all stored history ("max").
+        interval: "day" (every rate), "week" or "month" (last rate of each period) for `series`.
+        """
+        if interval not in ("day", *_TRUNC_UNITS):
+            raise ValueError(f"unknown interval {interval!r}")
         pair = {"base": base, "quote": quote}
+        point = class_row(RatePoint)
         with self._pool.connection() as conn, conn.cursor(row_factory=point) as cur:
             last_two = cur.execute(
                 "SELECT rate_date, rate FROM exchange_rates "
@@ -205,24 +213,48 @@ class RateRepository:
             if not last_two:
                 return None
             latest = last_two[0]
-            window = {**pair, "start": latest.rate_date - timedelta(days=days - 1),
-                      "end": latest.rate_date}
-            in_window = (
-                "FROM exchange_rates WHERE base = %(base)s AND quote = %(quote)s "
-                "AND rate_date BETWEEN %(start)s AND %(end)s"
-            )
-            series = cur.execute(
+            first_date = conn.execute(
+                "SELECT min(rate_date) FROM exchange_rates WHERE base = %(base)s AND quote = %(quote)s",
+                pair,
+            ).fetchone()[0]
+            window_start = first_date if days is None else latest.rate_date - timedelta(days=days - 1)
+            window = {**pair, "start": window_start, "end": latest.rate_date}
+            in_window = ("FROM exchange_rates WHERE base = %(base)s AND quote = %(quote)s "
+                         "AND rate_date BETWEEN %(start)s AND %(end)s")
+
+            points = cur.execute(
                 f"SELECT rate_date, rate {in_window} ORDER BY rate_date ASC", window
             ).fetchall()
-        # The window always contains `latest`, so series is never empty in practice.
-        stats = None
-        if series:
-            rates = [p.rate for p in series]
-            # Decimal arithmetic: exact sums; the division keeps 28 significant digits.
-            stats = PairStats(min(rates), max(rates), sum(rates) / len(rates))
-        return PairWindow(
+            recent = cur.execute(
+                "SELECT rate_date, rate FROM ("
+                "  SELECT rate_date, rate FROM exchange_rates"
+                "  WHERE base = %(base)s AND quote = %(quote)s AND rate_date <= %(end)s"
+                "  ORDER BY rate_date DESC LIMIT 200"
+                ") last_200 ORDER BY rate_date ASC",
+                window,
+            ).fetchall()
+            if interval == "day":
+                series = points
+            else:
+                # DISTINCT ON keeps the FIRST row of each group in ORDER BY order. Grouping by
+                # week/month and sorting each group newest first keeps the LAST rate of each
+                # period. The outer query puts the result back in date order.
+                unit = _TRUNC_UNITS[interval]
+                series = cur.execute(
+                    "SELECT rate_date, rate FROM ("
+                    f"  SELECT DISTINCT ON (date_trunc('{unit}', rate_date)) rate_date, rate"
+                    f"  {in_window}"
+                    f"  ORDER BY date_trunc('{unit}', rate_date), rate_date DESC"
+                    ") per_period ORDER BY rate_date ASC",
+                    window,
+                ).fetchall()
+
+        return PairHistory(
             latest=latest,
             previous=last_two[1] if len(last_two) > 1 else None,
+            first_available_date=first_date,
+            window_start=window_start,
+            points=points,
+            recent=recent,
             series=series,
-            stats=stats,
         )

@@ -53,3 +53,41 @@ def test_bad_params_400(seeded, path, field):
     resp = seeded.get(path)
     assert resp.status_code == 400
     assert [e["field"] for e in resp.json()["errors"]] == [field]
+
+
+@pytest.mark.parametrize(
+    ("query", "interval", "series_dates"),
+    [
+        ("window=7d", "day", ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"]),
+        ("window=1y", "day", ["2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"]),
+        ("window=3y", "week", ["2026-11-15", "2026-11-17"]),  # last rate of each ISO week
+        ("window=5y", "week", ["2026-11-15", "2026-11-17"]),
+        ("window=max", "month", ["2026-11-17"]),  # last rate of November
+        ("window=7d&interval=month", "month", ["2026-11-17"]),  # explicit override
+        ("window=max&interval=day", "day", ["2026-11-13", "2026-11-14", "2026-11-15",
+                                            "2026-11-16", "2026-11-17"]),
+    ],
+)
+def test_interval_defaults_and_override(seeded, query, interval, series_dates):
+    body = seeded.get(f"/v1/pairs/EUR/USD?{query}").json()
+    assert body["series_interval"] == interval
+    assert [p["date"] for p in body["series"]] == series_dates
+    assert body["data_points"] == 5  # stats and trend always use every daily rate
+    assert body["series"][-1]["rate"] == body["latest"]["rate"]
+
+
+def test_window_longer_than_history_returns_what_exists(seeded):
+    """5 years asked for, 5 days stored: 200, and period_start shows the real start."""
+    resp = seeded.get("/v1/pairs/EUR/USD?window=5y")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["window_start"] == "2021-11-19"  # 2026-11-17 minus 1824 days
+    assert body["trend"]["period_start"] == body["first_available_date"] == "2026-11-13"
+    assert body["trend"]["period_start"] > body["window_start"]  # = partial history
+    assert body["trend"]["annualized_change_pct"] is None  # only 4 days of data
+
+
+def test_bad_interval_is_400(seeded):
+    resp = seeded.get("/v1/pairs/EUR/USD?interval=year")
+    assert resp.status_code == 400
+    assert resp.json()["errors"][0]["field"] == "interval"
