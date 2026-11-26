@@ -1,0 +1,21 @@
+# Schemathesis configuration, used by `schemathesis run` and by tests/api/test_contract.py.
+#
+# The positive_data_acceptance check (ST202) assumes "schema-valid request => accepted". Some of
+# our rules can't be written as a JSON Schema, and the contract documents a 400 for them:
+#   - `cursor` must be a cursor WE issued: "0" is a valid string but not a valid cursor.
+#   - currency codes must EXIST: "ABC" matches ^[A-Z]{3,4}$ but is unknown, so 400 (listRates).
+# So for these operations only, a 400 on schema-valid input is accepted. All other checks
+# (documented status, content type, headers, response schema, no 5xx) still apply in full.
+# Expected-status list = schemathesis' default + "400".
+
+[[operations]]
+include-operation-id = "listCurrencies"
+checks.positive_data_acceptance.expected-statuses = [
+  "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
+]
+
+[[operations]]
+include-operation-id = "listRates"
+checks.positive_data_acceptance.expected-statuses = [
+  "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
+]

@@ -10,14 +10,16 @@ import pytest
 import schemathesis
 
 from fx_explorer.api.app import create_app
+from tests.api.conftest import seed
 
 pytestmark = pytest.mark.integration
 
-IMPLEMENTED = ["getHealth"]
+IMPLEMENTED = ["getHealth", "listCurrencies", "getCurrency", "listRates", "getPair"]
 
 
 @pytest.fixture
 def api_schema(pool):
+    seed(pool)  # real currencies and rates, so valid requests can find data
     app = create_app(pool=pool)
     # Load the contract through the app itself (GET /openapi.yaml): this also proves the
     # app serves exactly the file schemathesis tests against.

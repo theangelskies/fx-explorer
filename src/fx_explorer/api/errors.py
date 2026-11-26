@@ -6,6 +6,7 @@ and, for validation problems, `errors: [{field, message}]`.
 """
 
 import logging
+from urllib.parse import quote
 from typing import Any
 
 import psycopg
@@ -72,7 +73,9 @@ def problem_response(
         "title": title,
         "status": status,
         "detail": detail,
-        "instance": request.url.path,
+        # Percent-encode the path: request.url.path is DECODED, so /v1/currencies/%C2%84 would
+        # put a raw control character into `instance`, which is not a valid URI reference.
+        "instance": quote(request.url.path, safe="/:@!$&'()*+,;=-._~"),
     }
     if errors:
         body["errors"] = errors
