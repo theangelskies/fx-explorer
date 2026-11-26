@@ -2,7 +2,7 @@
  * TanStack Query hooks: one per contract operation the pages use. Each hook gives a page
  * `isPending` / `isError` / `data`, so every page handles loading, error and success the same way.
  */
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, type Schemas } from "./client";
 import { call } from "./errors";
@@ -58,8 +58,15 @@ export type Window = Schemas["Window"];
 export type SeriesInterval = Schemas["SeriesInterval"];
 
 /** getPair. Keeps the previous window on screen (dimmed) while a new one loads. */
-export function usePair(base: string, quote: string, window: Window, interval?: SeriesInterval) {
+export function usePair(
+  base: string,
+  quote: string,
+  window: Window,
+  interval?: SeriesInterval,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
+    enabled: options.enabled ?? true,
     queryKey: ["pair", base, quote, window, interval ?? "auto"],
     queryFn: () =>
       call(
@@ -77,5 +84,22 @@ export function useCurrency(code: string) {
     queryKey: ["currency", code],
     queryFn: () => call(api.GET("/v1/currencies/{code}", { params: { path: { code } } })),
     staleTime: 10 * 60_000,
+  });
+}
+
+export type Alert = Schemas["Alert"];
+export type AlertCreate = Schemas["AlertCreate"];
+export type AlertStatus = NonNullable<
+  NonNullable<paths["/v1/alerts"]["get"]["parameters"]["query"]>["status"]
+>;
+
+/** listAlerts, page by page ("Load more" follows next_cursor). */
+export function useAlerts(status?: AlertStatus) {
+  return useInfiniteQuery({
+    queryKey: ["alerts", status ?? "all"],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      call(api.GET("/v1/alerts", { params: { query: { status, cursor: pageParam, limit: 50 } } })),
+    getNextPageParam: (last) => last.page.next_cursor ?? undefined,
   });
 }

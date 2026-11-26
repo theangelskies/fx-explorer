@@ -50,6 +50,13 @@ function isProblem(value: unknown): value is Problem {
 export async function call<T>(
   request: Promise<{ data?: T; error?: unknown; response: Response }>,
 ): Promise<T> {
+  return (await callWithResponse(request)).data;
+}
+
+/** Like call(), but also returns the Response, for pages that need its headers. */
+export async function callWithResponse<T>(
+  request: Promise<{ data?: T; error?: unknown; response: Response }>,
+): Promise<{ data: T; response: Response }> {
   let result: { data?: T; error?: unknown; response: Response };
   try {
     result = await request;
@@ -57,7 +64,7 @@ export async function call<T>(
     throw new ApiError(0, API_UNREACHABLE, cause); // network error: fetch itself failed
   }
   const { data, error, response } = result;
-  if (response.ok) return data as T;
+  if (response.ok) return { data: data as T, response };
   if (isProblem(error)) throw new ApiError(response.status, error);
   // Not a Problem: something between us and the API answered (e.g. the dev proxy when the API
   // is down gives a plain 500/502/504).
