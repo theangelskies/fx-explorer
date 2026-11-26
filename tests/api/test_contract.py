@@ -14,7 +14,10 @@ from tests.api.conftest import seed
 
 pytestmark = pytest.mark.integration
 
-IMPLEMENTED = ["getHealth", "listCurrencies", "getCurrency", "listRates", "getPair"]
+IMPLEMENTED = [
+    "getHealth", "listCurrencies", "getCurrency", "listRates", "getPair",
+    "createAlert", "listAlerts", "getAlert", "deleteAlert",
+]
 
 
 @pytest.fixture

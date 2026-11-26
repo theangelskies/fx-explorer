@@ -70,6 +70,8 @@ def create_app(pool: ConnectionPool | None = None) -> FastAPI:
 
     for module in (health, currencies, rates, pairs, alerts):
         app.include_router(module.router)
+    # The API's routes, kept for errors.py to build a complete Allow header on 405s.
+    app.state.api_routes = [r for m in (health, currencies, rates, pairs, alerts) for r in m.router.routes]
     return app
 
 

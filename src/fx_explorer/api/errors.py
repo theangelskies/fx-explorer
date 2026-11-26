@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg_pool import PoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Match
 
 logger = logging.getLogger(__name__)
 
@@ -199,11 +200,26 @@ async def _http_handler(request: Request, exc: StarletteHTTPException) -> JSONRe
         return problem_response(
             request, "method-not-allowed",
             f"{request.method} is not allowed on {request.url.path}.",
-            headers=exc.headers,  # keeps the Allow header, which lists the allowed methods
+            headers={"Allow": _allowed_methods(request, (exc.headers or {}).get("Allow", ""))},
         )
     if exc.status_code < 500:
         return problem_response(request, "invalid-parameters", str(exc.detail))
     return problem_response(request, "internal-error", "Something went wrong on our side.")
+
+
+def _allowed_methods(request: Request, fallback: str) -> str:
+    """Every method our routes offer for this path, e.g. "GET, POST" for /v1/alerts.
+
+    Starlette's own Allow header only lists the methods of the FIRST route whose path matched,
+    but GET and POST /v1/alerts are separate routes, so it would say just "POST".
+    app.state.api_routes is filled by create_app(). Match.PARTIAL = "path matches, method doesn't".
+    """
+    methods: set[str] = set()
+    for route in getattr(request.app.state, "api_routes", []):
+        match, _ = route.matches(request.scope)
+        if match in (Match.FULL, Match.PARTIAL):
+            methods |= set(route.methods or ())
+    return ", ".join(sorted(methods)) or fallback
 
 
 async def _database_down_handler(request: Request, exc: Exception) -> JSONResponse:

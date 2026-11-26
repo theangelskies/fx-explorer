@@ -19,3 +19,19 @@ include-operation-id = "listRates"
 checks.positive_data_acceptance.expected-statuses = [
   "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
 ]
+
+# createAlert: a schema-valid body can still break rules a schema can't express, and the
+# contract documents a 422 for each: unknown currency ("ABC"), quote = base, or a pair with no
+# stored rates (the alert could never trigger).
+[[operations]]
+include-operation-id = "createAlert"
+checks.positive_data_acceptance.expected-statuses = [
+  "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "422",
+]
+
+# listAlerts: `cursor` must be one we issued (same reason as listCurrencies/listRates).
+[[operations]]
+include-operation-id = "listAlerts"
+checks.positive_data_acceptance.expected-statuses = [
+  "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
+]

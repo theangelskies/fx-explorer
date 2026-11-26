@@ -173,3 +173,12 @@ def test_unknown_id_404_and_malformed_id_400(seeded):
     resp = seeded.get("/v1/alerts/not-a-uuid")
     assert resp.status_code == 400
     assert resp.json()["errors"] == [{"field": "id", "message": "Must be a valid UUID."}]
+
+
+@pytest.mark.parametrize(("method", "path", "allow"),
+                         [("OPTIONS", "/v1/alerts", "GET, POST"),
+                          ("PUT", "/v1/alerts/3f2b8c1e-6a4d-4f7e-9b1a-2c5d8e9f0a1b", "DELETE, GET")])
+def test_405_allow_header_lists_every_method(seeded, method, path, allow):
+    resp = seeded.request(method, path)
+    assert resp.status_code == 405
+    assert resp.headers["allow"] == allow
