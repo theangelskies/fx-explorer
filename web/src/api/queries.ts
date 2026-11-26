@@ -51,3 +51,31 @@ export function useRates(query: RatesQuery) {
     placeholderData: keepPreviousData,
   });
 }
+
+export type PairDetail = Schemas["PairDetail"];
+export type PairTrend = Schemas["PairTrend"];
+export type Window = Schemas["Window"];
+export type SeriesInterval = Schemas["SeriesInterval"];
+
+/** getPair. Keeps the previous window on screen (dimmed) while a new one loads. */
+export function usePair(base: string, quote: string, window: Window, interval?: SeriesInterval) {
+  return useQuery({
+    queryKey: ["pair", base, quote, window, interval ?? "auto"],
+    queryFn: () =>
+      call(
+        api.GET("/v1/pairs/{base}/{quote}", {
+          params: { path: { base, quote }, query: { window, interval } },
+        }),
+      ),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** getCurrency (full names for headings). */
+export function useCurrency(code: string) {
+  return useQuery({
+    queryKey: ["currency", code],
+    queryFn: () => call(api.GET("/v1/currencies/{code}", { params: { path: { code } } })),
+    staleTime: 10 * 60_000,
+  });
+}

@@ -50,3 +50,39 @@ export function formatDateTime(timestamp: string): string {
     new Date(timestamp),
   );
 }
+
+export type Direction = "up" | "down" | "flat";
+
+/** Direction of a signed decimal string, without converting it to a float. */
+export function direction(value: string): Direction {
+  if (/^-?0*(\.0*)?$/.test(value)) return "flat";
+  return value.startsWith("-") ? "down" : "up";
+}
+
+/**
+ * "-0.2628" -> "−0.26%" (decimals given) or "−0.2628%" (exact). Always signed.
+ * Rounding to fewer decimals uses Number() for DISPLAY only (ADR 0004).
+ */
+export function formatPct(value: string, decimals?: number): string {
+  const dir = direction(value);
+  const magnitude = value.replace(/^-/, "");
+  const text = decimals === undefined ? formatDecimal(magnitude) : Number(magnitude).toFixed(decimals);
+  const sign = dir === "down" ? MINUS : dir === "up" ? "+" : "";
+  return `${sign}${text}%`;
+}
+
+/** Calendar days between two "YYYY-MM-DD" dates. */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
+/** 830 -> "2 years 3 months"; 45 -> "45 days". For "only … of data" messages. */
+export function spanText(days: number): string {
+  if (days < 60) return `${days} day${days === 1 ? "" : "s"}`;
+  const years = Math.floor(days / 365.25);
+  const months = Math.round((days - years * 365.25) / 30.44);
+  const parts = [];
+  if (years) parts.push(`${years} year${years === 1 ? "" : "s"}`);
+  if (months) parts.push(`${months} month${months === 1 ? "" : "s"}`);
+  return parts.join(" ") || "less than a month";
+}
