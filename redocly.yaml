@@ -3,6 +3,10 @@
 extends:
   - recommended
 
+rules:
+  # No license has been chosen for this project yet. Remove this line once info.license is added.
+  info-license: off
+
 apis:
   main:
     root: openapi.yaml
