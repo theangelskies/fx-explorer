@@ -188,6 +188,26 @@ class Importer:
         )
         return len(currency_rejects)
 
+    @staticmethod
+    def _drop_outside_range(rates, date, start, end):
+        """Keep only rates dated inside the range we asked for.
+
+        When a currency has no rate on the first requested day (e.g. NGN on a weekend),
+        Frankfurter also returns its last rate BEFORE `from`, e.g. asking for 2017 gives an
+        NGN record dated 2016-12-30, with a different value than the 2016 response gave for
+        that same day. Storing it would make yearly chunks overwrite each other's boundary
+        days on every run. The in-range answer is the real one, so the extra record is dropped.
+        These are expected, so they are logged but not counted as rejects.
+        """
+        low = date or start
+        high = date or end
+        kept = [r for r in rates
+                if (low is None or r.rate_date >= low) and (high is None or r.rate_date <= high)]
+        if len(kept) < len(rates):
+            logger.info("Ignored %d rate(s) dated outside the requested range %s..%s",
+                        len(rates) - len(kept), low, high)
+        return kept
+
     def _import(self, run_id, base, quotes, date, start, end, refresh_currencies) -> ImportSummary:
         # 1. Currencies first: every rate points at two of them (foreign keys).
         currency_rejected = self._refresh_currencies() if refresh_currencies else 0
@@ -195,6 +215,7 @@ class Importer:
         # 2. Rates: fetch, clean, save.
         raw_rates = self._client.get_rates(base, quotes, date=date, start=start, end=end)
         valid, rate_rejects = parse_rates(raw_rates, self._currencies.known_codes())
+        valid = self._drop_outside_range(valid, date, start, end)
         result = self._rates.upsert_many(valid)
 
         rejected = len(rate_rejects) + len(result.unknown_currency) + currency_rejected

@@ -65,11 +65,11 @@ def test_import_then_repeat_is_idempotent(importer, api, pool):
 def test_revised_rate_counts_as_update(importer, api):
     route = api.get("/rates")
     route.mock(return_value=httpx.Response(200, json=GOOD))
-    importer.run("EUR", ["USD", "GBP"], date=dt.date(2026, 11, 20))
+    importer.run("EUR", ["USD", "GBP"], start=dt.date(2026, 11, 19), end=dt.date(2026, 11, 20))
     revised = [dict(r) for r in GOOD]
     revised[2]["rate"] = 1.1
     route.mock(return_value=httpx.Response(200, json=revised))
-    result = importer.run("EUR", ["USD", "GBP"], date=dt.date(2026, 11, 20))
+    result = importer.run("EUR", ["USD", "GBP"], start=dt.date(2026, 11, 19), end=dt.date(2026, 11, 20))
     assert (result.inserted, result.updated, result.unchanged) == (0, 1, 3)
 
 
@@ -139,3 +139,13 @@ def test_cli_parses_options():
     )
     assert args.quotes == ["USD", "GBP"]
     assert args.start == dt.date(2026, 11, 1) and args.end == dt.date(2026, 11, 20)
+
+
+def test_records_outside_requested_range_are_not_stored(importer, api, pool):
+    """Frankfurter adds the last rate BEFORE `from` when a currency has none on day one
+    (seen for NGN: asking for 2017 also returns 2016-12-30). We must not store it."""
+    data = rates_json(("2016-12-30", "USD", 1.0541)) + GOOD
+    api.get("/rates").mock(return_value=httpx.Response(200, json=data))
+    result = importer.run("EUR", ["USD", "GBP"], start=dt.date(2026, 11, 19), end=dt.date(2026, 11, 20))
+    assert (result.status, result.fetched, result.inserted, result.rejected) == ("success", 5, 4, 0)
+    assert RateRepository(pool).count() == 4
