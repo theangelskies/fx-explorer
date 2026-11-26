@@ -33,7 +33,7 @@ Sources: [RFC 9110 (HTTP semantics)](https://www.rfc-editor.org/rfc/rfc9110), [R
 | Method | Used for | Safe? | Idempotent? |
 |---|---|---|---|
 | `GET` | Read a resource or a list | yes | yes |
-| `POST` | Create a new resource in a collection | no | **no** (unless an `Idempotency-Key` is sent; see ADR 0005) |
+| `POST` | Create a new resource in a collection | no | **no** (unless an `Idempotency-Key` is sent; see ADR 0006) |
 | `DELETE` | Remove a resource | no | yes |
 
 - **Safe** = it changes nothing on the server. **Idempotent** = doing it twice has the same effect as doing it once.

@@ -26,6 +26,9 @@ info:
       exactly (no lowercase).
     - Only rates the importer stored are served. No cross rates are calculated (if only
       EUR-based rates were imported, `USD/GBP` has no data).
+    - **Trend numbers are computed by the server** from stored daily rates, with the formulas
+      written in the schemas (ADR 0005). They describe the past: these are reference rates,
+      and past trends don't predict future rates.
 
 servers:
   - url: /
@@ -46,7 +49,7 @@ tags:
     description: |
       Rate alerts: "tell me when EUR/USD goes above 1.2000". An alert is *triggered* when the
       latest stored rate has reached its threshold. Creating an alert supports an optional
-      `Idempotency-Key` header so retries never create duplicates (ADR 0005).
+      `Idempotency-Key` header so retries never create duplicates (ADR 0006).
 
 paths:
   /v1/health:
@@ -172,14 +175,24 @@ paths:
   /v1/pairs/{base}/{quote}:
     get:
       operationId: getPair
-      summary: Get a pair summary over a time window
+      summary: Get a pair summary and long-range trend over a time window
       description: |
-        Summarises one pair: the latest stored rate, the change from the previous stored
-        rate, and min/max/average plus a daily series over the chosen `window`.
+        Summarises one pair: the latest stored rate and its change from the previous stored
+        rate, min/max/average and **trend statistics** over the chosen `window`, plus a chart
+        series (daily, or down-sampled to weekly/monthly for long windows). See ADR 0005.
 
-        The window **ends at the latest stored date** for this pair (not today), so a pair
-        that hasn't been imported recently still shows a full chart. `7d` means the 7
-        calendar days up to and including that date. `1y` means 365 days.
+        **The window ends at the latest stored date** for this pair (not today), so a pair
+        that hasn't been imported recently still shows a full chart. Window lengths in
+        calendar days, counting that date: `7d` = 7, `30d` = 30, `90d` = 90, `1y` = 365,
+        `3y` = 1095, `5y` = 1825. `max` = all stored history.
+
+        **Asking for more history than exists is not an error:** the response covers what is
+        stored (`200`), `trend.period_start` shows where the data really starts, and it is
+        later than `window_start`.
+
+        Every number is computed by the server from stored daily rates with the formulas in
+        the `PairTrend` schema, so all clients show the same values. These are reference
+        rates, and past trends don't predict future rates.
 
         Returns **404** if either currency is unknown or no rates are stored for the pair.
       tags: [Pairs]
@@ -187,6 +200,7 @@ paths:
         - $ref: '#/components/parameters/BasePath'
         - $ref: '#/components/parameters/QuotePath'
         - $ref: '#/components/parameters/Window'
+        - $ref: '#/components/parameters/Interval'
       responses:
         '200':
           description: The pair summary.
@@ -195,7 +209,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/PairDetail'
               examples:
-                eurUsd:
+                eurUsd30d:
+                  $ref: '#/components/examples/PairDetail30dExample'
+                eurUsd5y:
+                  $ref: '#/components/examples/PairDetail5yExample'
+                fewDaysStored:
                   $ref: '#/components/examples/PairDetailExample'
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -455,6 +473,16 @@ components:
       description: Length of the history window, ending at the latest stored date.
       schema:
         $ref: '#/components/schemas/Window'
+    Interval:
+      name: interval
+      in: query
+      description: |
+        Spacing of the points in `series`. When omitted: `day` for windows up to `1y`,
+        `week` for `3y` and `5y`, `month` for `max`. Down-sampled points use the **last
+        stored rate in each ISO week (Monday–Sunday) or calendar month**, dated on the day of
+        that rate. Only `series` is down-sampled: `stats` and `trend` always use every daily rate.
+      schema:
+        $ref: '#/components/schemas/SeriesInterval'
     AlertStatus:
       name: status
       in: query
@@ -476,7 +504,7 @@ components:
       required: false
       description: |
         A unique value you generate per *intended* action (a UUID is ideal). Reuse it only
-        to retry the **same** request. See ADR 0005.
+        to retry the **same** request. See ADR 0006.
       schema:
         type: string
         minLength: 1
@@ -571,8 +599,13 @@ components:
 
     Window:
       type: string
-      enum: [7d, 30d, 90d, 1y]
+      description: '`7d` = 7, `30d` = 30, `90d` = 90, `1y` = 365, `3y` = 1095, `5y` = 1825 calendar days; `max` = all stored history.'
+      enum: [7d, 30d, 90d, 1y, 3y, 5y, max]
       default: 30d
+
+    SeriesInterval:
+      type: string
+      enum: [day, week, month]
 
     PositiveDecimal:
       type: string
@@ -720,7 +753,7 @@ components:
 
     PairStats:
       type: object
-      description: Statistics over the series in the window.
+      description: Statistics over every daily rate in the window (never the down-sampled series).
       required: [min, max, avg]
       properties:
         min:
@@ -732,9 +765,102 @@ components:
             - $ref: '#/components/schemas/PositiveDecimal'
           description: Arithmetic mean, rounded to 10 decimal places (trailing zeros removed).
 
+    TrendMove:
+      type: object
+      description: A single-day move between two consecutive stored rates.
+      required: [date, change_pct]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Date of the later of the two rates (the day the move ended).
+        change_pct:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`(rate / previous stored rate − 1) × 100`, rounded to 4 decimal places.'
+
+    PairTrend:
+      type: object
+      description: |
+        Trend statistics over the daily rates in the window, computed by the server (ADR 0005).
+        Let `first` and `last` be the first and last stored daily rates in the window, and
+        `days` the number of calendar days between `period_start` and `period_end`.
+
+        Percentages are decimal strings rounded to **4 decimal places** (half to even).
+        Rate-valued fields keep rate precision instead: `change_abs` is exact, moving averages
+        are rounded to 10 decimal places with trailing zeros removed (like `stats.avg`), so tiny
+        rates such as 0.00029946 aren't rounded away.
+
+        A "daily return" is the move between two **consecutive stored rates**. Our data has a
+        rate for every calendar day for most currencies (weekends included); where a day is
+        missing (e.g. NGN weekends in early years) the move spans the gap.
+
+        These are reference rates. Past trends don't predict future rates.
+      required: [period_start, period_end, change_abs, change_pct, annualized_change_pct,
+                 volatility_annualized_pct, biggest_rise, biggest_fall, moving_average_30,
+                 moving_average_200]
+      properties:
+        period_start:
+          type: string
+          format: date
+          description: Date of the first stored rate in the window. Later than `window_start` when less history is stored.
+        period_end:
+          type: string
+          format: date
+          description: Date of the last stored rate in the window (= `latest.rate_date`).
+        change_abs:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`last − first`, exact.'
+        change_pct:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`(last / first − 1) × 100`.'
+        annualized_change_pct:
+          description: |
+            Compound yearly rate of change: `((last / first) ^ (365.25 / days) − 1) × 100`.
+            `null` when `days` < 365, because annualising a short period exaggerates it.
+          oneOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+            - type: 'null'
+        volatility_annualized_pct:
+          description: |
+            How much the rate typically moves, as a yearly figure:
+            `stdev(daily log returns) × √365 × 100`, where a daily log return is
+            `ln(rate / previous stored rate)` and stdev is the sample standard deviation
+            (divides by n − 1). √365 because the data has one rate per calendar day.
+            `null` when there are fewer than 20 daily returns.
+          oneOf:
+            - type: string
+              pattern: '^\d+(\.\d+)?$'
+            - type: 'null'
+        biggest_rise:
+          description: The largest positive single-day move in the window (earliest date wins a tie). `null` if no day rose (or fewer than 2 rates).
+          oneOf:
+            - $ref: '#/components/schemas/TrendMove'
+            - type: 'null'
+        biggest_fall:
+          description: The largest negative single-day move in the window (earliest date wins a tie). `null` if no day fell (or fewer than 2 rates).
+          oneOf:
+            - $ref: '#/components/schemas/TrendMove'
+            - type: 'null'
+        moving_average_30:
+          description: |
+            Average of the last 30 stored daily rates up to `period_end` (may reach back before
+            the window, so it's the same for every window). `null` if fewer than 30 are stored.
+          oneOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+            - type: 'null'
+        moving_average_200:
+          description: Same as `moving_average_30`, over the last 200 stored daily rates. `null` if fewer than 200 are stored.
+          oneOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+            - type: 'null'
+
     PairDetail:
       type: object
-      required: [base, quote, window, latest, previous, change_abs, change_pct, stats, series]
+      required: [base, quote, window, window_start, series_interval, first_available_date,
+                 data_points, latest, previous, change_abs, change_pct, stats, trend, series]
       properties:
         base:
           $ref: '#/components/schemas/CurrencyCode'
@@ -742,6 +868,25 @@ components:
           $ref: '#/components/schemas/CurrencyCode'
         window:
           $ref: '#/components/schemas/Window'
+        window_start:
+          type: string
+          format: date
+          description: |
+            First date the window asks for: `latest.rate_date − (window days − 1)`, or
+            `first_available_date` for `max`. If `trend.period_start` is later, less history is
+            stored than the window asks for (e.g. "only 2 years of data for this pair").
+        series_interval:
+          allOf:
+            - $ref: '#/components/schemas/SeriesInterval'
+          description: The spacing actually used for `series` (the `interval` sent, or its default for this window).
+        first_available_date:
+          type: string
+          format: date
+          description: Date of the earliest rate we hold for this pair (in any window).
+        data_points:
+          type: integer
+          minimum: 1
+          description: Number of stored daily rates in the window. `stats` and `trend` are based on these.
         latest:
           $ref: '#/components/schemas/RatePoint'
         previous:
@@ -760,13 +905,21 @@ components:
             - $ref: '#/components/schemas/SignedDecimal'
             - type: 'null'
         stats:
-          description: Min, max and average over `series`. `null` only if `series` is empty.
+          description: Min, max and average over every daily rate in the window. `null` only if the window has no rates.
           oneOf:
             - $ref: '#/components/schemas/PairStats'
             - type: 'null'
+        trend:
+          description: Long-range trend over the window. `null` only if the window has no rates (it always contains `latest`, so not expected in practice).
+          oneOf:
+            - $ref: '#/components/schemas/PairTrend'
+            - type: 'null'
         series:
           type: array
-          description: Stored rates within the window, oldest first (ready to plot). Days without a stored rate are simply absent.
+          description: |
+            Chart points within the window, oldest first, spaced by `series_interval`. With
+            `day`, every stored rate; with `week`/`month`, the last stored rate of each period,
+            so the final point is always `latest`. Days without a stored rate are simply absent.
           items:
             $ref: '#/components/schemas/SeriesPoint'
 
@@ -966,12 +1119,96 @@ components:
           limit: 3
           next_cursor: eyJkIjoiMjAyNi0xMS0xNSIsInEiOiJVU0QifQ
 
+    PairDetail30dExample:
+      summary: EUR/USD, 30 days, daily points (real data; series shortened to 5 of 30 points)
+      value:
+        base: EUR
+        quote: USD
+        window: 30d
+        window_start: '2026-10-28'
+        series_interval: day
+        first_available_date: '2016-01-01'
+        data_points: 30
+        latest:
+          rate_date: '2026-11-26'
+          rate: '1.0948'
+        previous:
+          rate_date: '2026-11-25'
+          rate: '1.0949'
+        change_abs: '-0.0001'
+        change_pct: '-0.0091'
+        stats:
+          min: '1.0948'
+          max: '1.1249'
+          avg: '1.1099966667'
+        trend:
+          period_start: '2026-10-28'
+          period_end: '2026-11-26'
+          change_abs: '-0.0201'
+          change_pct: '-1.8029'
+          annualized_change_pct: null
+          volatility_annualized_pct: '3.7660'
+          biggest_rise: { date: '2026-11-04', change_pct: '0.3217' }
+          biggest_fall: { date: '2026-11-12', change_pct: '-0.6532' }
+          moving_average_30: '1.1099966667'
+          moving_average_200: '1.1429305'
+        series:
+          - { date: '2026-10-28', rate: '1.1149' }
+          - { date: '2026-10-29', rate: '1.116' }
+          - { date: '2026-11-24', rate: '1.0949' }
+          - { date: '2026-11-25', rate: '1.0949' }
+          - { date: '2026-11-26', rate: '1.0948' }
+
+    PairDetail5yExample:
+      summary: EUR/USD, 5 years, weekly points (real data; series shortened to 5 of 262 points)
+      value:
+        base: EUR
+        quote: USD
+        window: 5y
+        window_start: '2021-11-28'
+        series_interval: week
+        first_available_date: '2016-01-01'
+        data_points: 1825
+        latest:
+          rate_date: '2026-11-26'
+          rate: '1.0948'
+        previous:
+          rate_date: '2026-11-25'
+          rate: '1.0949'
+        change_abs: '-0.0001'
+        change_pct: '-0.0091'
+        stats:
+          min: '0.96024'
+          max: '1.1965'
+          avg: '1.0999654904'
+        trend:
+          period_start: '2021-11-28'
+          period_end: '2026-11-26'
+          change_abs: '-0.0313'
+          change_pct: '-2.7795'
+          annualized_change_pct: '-0.5629'
+          volatility_annualized_pct: '4.9651'
+          biggest_rise: { date: '2025-04-11', change_pct: '1.6745' }
+          biggest_fall: { date: '2022-07-06', change_pct: '-1.1078' }
+          moving_average_30: '1.1099966667'
+          moving_average_200: '1.1429305'
+        series:
+          - { date: '2021-11-28', rate: '1.1261' }
+          - { date: '2021-12-05', rate: '1.1301' }
+          - { date: '2026-11-15', rate: '1.1068' }
+          - { date: '2026-11-22', rate: '1.0985' }
+          - { date: '2026-11-26', rate: '1.0948' }
+
     PairDetailExample:
-      summary: EUR/USD over 7 days (only 5 days stored in this example)
+      summary: Only 5 days stored, 7-day window (too short for annualised change, volatility or moving averages)
       value:
         base: EUR
         quote: USD
         window: 7d
+        window_start: '2026-11-11'
+        series_interval: day
+        first_available_date: '2026-11-13'
+        data_points: 5
         latest:
           rate_date: '2026-11-17'
           rate: '1.1005'
@@ -984,6 +1221,17 @@ components:
           min: '1.1005'
           max: '1.1076'
           avg: '1.1051'
+        trend:
+          period_start: '2026-11-13'
+          period_end: '2026-11-17'
+          change_abs: '-0.0071'
+          change_pct: '-0.6410'
+          annualized_change_pct: null
+          volatility_annualized_pct: null
+          biggest_rise: null
+          biggest_fall: { date: '2026-11-16', change_pct: '-0.3072' }
+          moving_average_30: null
+          moving_average_200: null
         series:
           - { date: '2026-11-13', rate: '1.1076' }
           - { date: '2026-11-14', rate: '1.1072' }

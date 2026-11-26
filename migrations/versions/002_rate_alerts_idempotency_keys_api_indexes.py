@@ -38,7 +38,7 @@ def upgrade() -> None:
     # GET /v1/alerts pages newest first: ORDER BY created_at DESC, id DESC.
     op.execute("CREATE INDEX ix_rate_alerts_created_id ON rate_alerts (created_at DESC, id DESC)")
 
-    # One row per Idempotency-Key seen on POST /v1/alerts (see ADR 0005, Phase 7).
+    # One row per Idempotency-Key seen on POST /v1/alerts (see ADR 0006).
     op.execute(
         """
         CREATE TABLE idempotency_keys (

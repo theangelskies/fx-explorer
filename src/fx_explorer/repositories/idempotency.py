@@ -1,7 +1,7 @@
 """idempotency_keys table: storage for the Idempotency-Key pattern. SQL only, no HTTP.
 
 The rules (what to do with a replay, a mismatch, a key in progress) live in
-api/idempotency.py (Phase 7). This module only stores and reads keys safely when two
+api/idempotency.py (ADR 0006). This module only stores and reads keys safely when two
 requests arrive at the same moment.
 """
 
