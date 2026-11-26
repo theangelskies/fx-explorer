@@ -23,11 +23,16 @@ checks.positive_data_acceptance.expected-statuses = [
 # createAlert: a schema-valid body can still break rules a schema can't express, and the
 # contract documents a 422 for each: unknown currency ("ABC"), quote = base, or a pair with no
 # stored rates (the alert could never trigger).
+#
+# ensure_resource_availability (ST302) is off for createAlert only: an idempotent replay returns
+# the STORED 201 even if that alert was deleted since, so its Location can be 404. This is the
+# documented behaviour (openapi.yaml createAlert, ADR 0006), not a bug. Every other check stays on.
 [[operations]]
 include-operation-id = "createAlert"
 checks.positive_data_acceptance.expected-statuses = [
   "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "422",
 ]
+checks.ensure_resource_availability.enabled = false
 
 # listAlerts: `cursor` must be one we issued (same reason as listCurrencies/listRates).
 [[operations]]

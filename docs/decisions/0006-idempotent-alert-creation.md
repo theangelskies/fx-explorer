@@ -53,6 +53,13 @@ Details:
   next request with that key. Completed keys are never taken over.
 - **A replay is the stored response, not a fresh read.** `current_rate` and `triggered` in a
   replay are what the first request returned. Use `GET /v1/alerts/{id}` for the live values.
+- **A replay after a delete still replays.** If the alert was created with key K and later
+  deleted, a retry with K gets the stored `201`, whose `Location` now returns `404`. The retry is
+  a retry of a creation that *did* happen, so creating a second alert would be wrong (it would
+  bring back an alert the user removed). This matches Stripe and the IETF draft, and is stated in
+  the contract. Schemathesis' stateful check "a created resource must be retrievable"
+  (ST302, `ensure_resource_availability`) assumes otherwise, so that one check is turned off for
+  `createAlert` only, in `schemathesis.toml`. Found by schemathesis, decided on 2026-11-26.
 
 ## Alternatives considered
 
@@ -63,6 +70,9 @@ Details:
 - **Client-generated ids with `PUT /v1/alerts/{id}`:** idempotent by HTTP semantics, but a bigger
   contract change, and the server no longer controls ids. Reasonable, but the Idempotency-Key
   header is the widely used convention for "create" APIs. Rejected for now.
+- **Forget the key when its alert is deleted:** schemathesis' stateful check would pass, but a
+  delayed retry arriving after a delete would silently re-create the alert the user removed.
+  Rejected.
 - **Store validation errors too:** then a user who fixes a typo and retries with the same key
   would get "key reused with a different body". Following Stripe, only executed requests are
   stored. Rejected.

@@ -242,9 +242,13 @@ paths:
 
         **Idempotency (optional):** send an `Idempotency-Key` header to make retries safe.
         - Same key + same body: the **stored** response is returned again (same alert,
-          `201`) with `Idempotent-Replayed: true`. No second alert is created.
+          `201`) with `Idempotent-Replayed: true`. No second alert is created. A replay is
+          a record of what the first request returned, not a fresh read: if the alert has
+          since been deleted, the replay still points at it and its `Location` returns `404`.
         - Same key + different body: `422` (`/problems/idempotency-key-reused`).
         - Same key while the first request is still running: `409`.
+        - A request that fails validation (`422`) or errors (`5xx`) stores nothing, so the
+          same key can be used again for the corrected request.
       tags: [Alerts]
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
