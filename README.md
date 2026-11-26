@@ -1,8 +1,8 @@
 # fx-explorer
 
-A small Python app that downloads currency exchange rates from the [Frankfurter API](https://frankfurter.dev), checks and cleans them, and stores them in a PostgreSQL database running in Docker.
+A small Python app that downloads currency exchange rates from the [Frankfurter API](https://frankfurter.dev), checks and cleans them, and stores them in a PostgreSQL database running in Docker. On top of the stored data sits a **REST API** (designed contract-first in [`openapi.yaml`](openapi.yaml)) and a **web dashboard** built only from that contract.
 
-You can run it as often as you like. Importing the same data twice never creates duplicates.
+You can run the importer as often as you like. Importing the same data twice never creates duplicates.
 
 ## Why Frankfurter?
 
@@ -15,9 +15,9 @@ You can run it as often as you like. Importing the same data twice never creates
 ## How it works
 
 ```
-Frankfurter API ──► client ──► parser ──► repository ──► PostgreSQL
-                    HTTP,      validate    SQL, upserts
-                    retries    & clean
+Frankfurter API ──► client ──► parser ──► repository ──► PostgreSQL ◄── repository ◄── REST API ◄── web UI
+                    HTTP,      validate    SQL, upserts                  SQL reads      FastAPI       React
+                    retries    & clean                                                  (/v1/…)       (contract-only)
                          ▲                      ▲
                          └───── importer ───────┘   (runs the steps in order)
                                     ▲
@@ -30,15 +30,20 @@ Frankfurter API ──► client ──► parser ──► repository ──►
 | `frankfurter/schemas.py` | Describes the raw JSON the API returns. |
 | `parsing/` | Turns raw records into clean ones. Bad records are set aside with a reason instead of crashing the run. |
 | `domain/models.py` | The clean `Currency` and `ExchangeRate` objects. |
-| `repositories/` | The only code that writes SQL. |
-| `importer.py` | Runs one import from start to finish and records a summary. |
+| `repositories/` | The only code that writes SQL (for the importer **and** the API). |
+| `importer.py`, `backfill.py` | Runs one import, or plans a multi-year backfill in yearly chunks. |
 | `__main__.py` | The command line interface. |
+| `analytics/trends.py` | Pure trend maths (change, annualised change, volatility, moving averages), exact `Decimal`. |
+| `api/` | The FastAPI app: routes, Problem Details errors, cursors, idempotency. |
+| `web/` | The React app, built only from `openapi.yaml`. |
 
-Each part only does its own job: the client never touches the database, the repositories never make HTTP calls, and the importer contains neither SQL nor HTTP details.
+Each part only does its own job: the client never touches the database, the repositories never make HTTP calls, the importer contains neither SQL nor HTTP details, and the API never calls Frankfurter (it serves what the importer stored).
 
 ## Tech stack
 
-Python 3.12 (managed with [uv](https://docs.astral.sh/uv/)), httpx, pydantic v2, psycopg 3, Alembic (plain SQL migrations), pytest and respx, PostgreSQL 16 in Docker Compose.
+- **Importer & API:** Python 3.12 (managed with [uv](https://docs.astral.sh/uv/)), httpx, pydantic v2, psycopg 3, Alembic (plain SQL migrations), FastAPI + uvicorn, PostgreSQL 16 in Docker Compose.
+- **Tests & contract:** pytest, respx, schemathesis (property-based contract tests), PyYAML, Redocly CLI (lint + docs).
+- **Web:** Node 22+, Vite, React, TypeScript, Tailwind CSS, React Router, TanStack Query, Recharts, openapi-typescript + openapi-fetch (types and client generated from the contract).
 
 ## Getting started
 
@@ -46,14 +51,16 @@ Python 3.12 (managed with [uv](https://docs.astral.sh/uv/)), httpx, pydantic v2,
 
 - [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you if needed)
 - Docker with Docker Compose
+- Node.js 22 or newer (for the web app and `npx @redocly/cli`)
 
 ### Setup
 
 ```bash
 cp .env.example .env          # then edit it (see below)
 docker compose up -d          # starts PostgreSQL on port 5433
-uv sync                       # installs dependencies
+uv sync                       # installs Python dependencies
 uv run alembic upgrade head   # creates the tables
+(cd web && npm install)       # installs the web app's dependencies
 ```
 
 In `.env`, replace `change_me` with a password of your choice **in all three places**: `POSTGRES_PASSWORD`, `DATABASE_URL` and `TEST_DATABASE_URL`. The first start can take a minute while the databases are created.
@@ -61,6 +68,10 @@ In `.env`, replace `change_me` with a password of your choice **in all three pla
 ### Importing rates
 
 ```bash
+# Years of history, in yearly chunks (recommended first import)
+uv run python -m fx_explorer import --backfill --from 2016-01-01
+uv run python -m fx_explorer import --backfill --from 2016-01-01 --dry-run   # show the plan, call nothing
+
 # One day, chosen currencies
 uv run python -m fx_explorer import --base EUR --quotes USD,GBP --date 2026-11-20
 
@@ -71,9 +82,36 @@ uv run python -m fx_explorer import --from 2026-01-01 --to 2026-11-20
 uv run python -m fx_explorer import --incremental
 ```
 
-If you leave out `--base` and `--quotes`, the defaults from `.env` are used. `--incremental` needs some data already stored. It starts 3 days before the newest stored date, because blended rates can be revised after the fact.
+If you leave out `--base` and `--quotes`, the defaults from `.env` are used.
+
+**`--backfill`** splits `--from … --to` (default today) into calendar years and imports them one by one, with the usual throttle between requests. It never asks for dates before a currency's first available date (Frankfurter's `start_date`); limited or skipped currencies are logged with the reason. Each yearly request is its own row in `import_runs`. If a year still fails after retries, the backfill carries on and finally lists the failed years with the exact command to re-run them (exit code 1). Re-running is safe: the second run reports `inserted=0`.
+
+`--incremental` needs some data already stored. It starts 3 days before the newest stored date, because blended rates can be revised after the fact (but see the revision note in "Surprises in the data").
 
 Every run logs a summary of how many records were fetched, inserted, updated, unchanged and rejected, and is also saved in the `import_runs` table. A run ends as `success`, `partial` (some records were rejected) or `failed` (with the error message saved).
+
+### Data coverage
+
+What the database held after the backfill of 2026-11-26 (`--backfill --from 2016-01-01`, base EUR):
+
+| Currency | First available at Frankfurter | Stored from | Stored to | Rows |
+|---|---|---|---|---|
+| EUR (base) | 1999-01-01 | n/a | n/a | n/a |
+| USD | 1948-06-21 | 2016-01-01 | 2026-11-26 | 3,983 |
+| GBP | 1949-12-21 | 2016-01-01 | 2026-11-26 | 3,983 |
+| CHF | 1949-12-21 | 2016-01-01 | 2026-11-26 | 3,983 |
+| CAD | 1953-05-11 | 2016-01-01 | 2026-11-26 | 3,983 |
+| JPY | 1969-12-01 | 2016-01-01 | 2026-11-26 | 3,983 |
+| NGN | 1999-01-04 | 2016-01-01 | 2026-11-25 | 3,601 |
+
+**23,516 rows in total.** There's a rate for every calendar day (weekends included) for every currency except NGN, which had weekday-only data until 2021. With EUR as the base nothing exists before 1999-01-01. Details and other findings: [`docs/frankfurter-notes.md`](docs/frankfurter-notes.md).
+
+To extend or refresh the history (safe to repeat):
+
+```bash
+uv run python -m fx_explorer import --backfill --from 1999-01-01          # everything EUR-based
+uv run python -m fx_explorer import --backfill --quotes SLE --from 2016-01-01   # add a currency
+```
 
 ### Configuration
 
@@ -90,6 +128,13 @@ Settings live in `.env`:
 | `DEFAULT_BASE` | Base currency (default EUR) |
 | `DEFAULT_QUOTES` | Currencies to import by default (default USD,GBP,NGN,JPY,CHF,CAD) |
 
+## Week 2: API & web UI
+
+Built **contract-first**: [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1) was written and linted before any API code, and it's the source of truth. If code and contract disagree, the code is wrong ([ADR 0001](docs/decisions/0001-contract-first-openapi.md)). The web app is built only from the contract: its TypeScript types are generated from it.
+
+- **Contract:** [`openapi.yaml`](openapi.yaml) · rendered docs: [`docs/api.html`](docs/api.html) (open in a browser; rebuild with `npx @redocly/cli build-docs openapi.yaml -o docs/api.html`)
+- **Design guides:** [`docs/api-design.md`](docs/api-design.md) (API rules) · [`docs/ui-design.md`](docs/ui-design.md) (design system, wireframes, states)
+
 ### Running the API
 
 ```bash
@@ -97,23 +142,100 @@ uv run alembic upgrade head                        # once, after pulling new mig
 uv run uvicorn fx_explorer.api.app:app --reload    # http://localhost:8000
 ```
 
-- `GET /v1/health`: `{"status":"ok","database":"ok"}`, or a 503 Problem if the database is down.
-- `/openapi.yaml`: the API contract (the hand-written file from the repo root).
-- `/docs`: Swagger UI for that contract.
+- `/docs`: Swagger UI for the contract · `/openapi.yaml`: the contract itself (FastAPI's auto-generated spec is switched off, so there is only one).
+- Every error is RFC 9457 Problem Details (`application/problem+json`): 400 for bad query/path parameters, 422 for a bad request body, with one `{field, message}` per invalid field ([ADR 0002](docs/decisions/0002-error-format-problem-details.md)).
+- The API starts even if the database is down; it then answers 503.
 
-Contract test against the running server (another terminal):
+### Running the web app
 
 ```bash
-uv run schemathesis run openapi.yaml --url http://localhost:8000 --include-operation-id getHealth
+cd web
+npm run dev        # http://localhost:5173 (needs the API running; /v1 is proxied to :8000)
+npm run build      # regenerates the API types from ../openapi.yaml, type-checks, builds to dist/
+npm run gen:api    # only regenerate src/api/schema.d.ts from the contract
 ```
+
+Pages: **Dashboard** (`/`), **Rates explorer** (`/rates`), **Pair detail** (`/pairs/EUR/USD`), **Alerts** (`/alerts`). Light/dark mode follows your system (toggle in the header). Press **`?`** for keyboard shortcuts, **`/`** to jump to a pair.
+
+### Endpoints
+
+All under `/v1`. Decimals are strings (`"1.0948"`) to keep exact precision ([ADR 0004](docs/decisions/0004-decimals-as-strings.md)); lists use opaque cursor pagination ([ADR 0003](docs/decisions/0003-cursor-pagination.md)).
+
+| Method | Path | operationId | What it does |
+|---|---|---|---|
+| GET | `/v1/health` | `getHealth` | API and database status (503 if the DB is down) |
+| GET | `/v1/currencies` | `listCurrencies` | Currencies, filter by `type`, `q`, `has_rates`; cursor pages |
+| GET | `/v1/currencies/{code}` | `getCurrency` | One currency, with `rates_count` and `latest_rate_date` |
+| GET | `/v1/rates` | `listRates` | Daily rates: `base`, `quotes`, `from`/`to`, `sort`; cursor pages |
+| GET | `/v1/pairs/{base}/{quote}` | `getPair` | Pair summary over `7d`…`5y`/`max`: latest, stats, **trend** (change, annualised, volatility, biggest moves, MA30/200), chart series (daily/weekly/monthly) |
+| GET | `/v1/movers` | `listMovers` | Biggest day-over-day moves, latest day per currency |
+| GET | `/v1/import-runs/latest` | `getLatestImportRun` | The most recent import run (data freshness) |
+| POST | `/v1/alerts` | `createAlert` | Create a rate alert (422 field errors; optional `Idempotency-Key`) |
+| GET | `/v1/alerts` | `listAlerts` | Alerts, filter `status=triggered\|waiting`; cursor pages |
+| GET | `/v1/alerts/{id}` | `getAlert` | One alert with live `current_rate` and `triggered` |
+| DELETE | `/v1/alerts/{id}` | `deleteAlert` | Delete an alert (204, then 404) |
+
+**Idempotent alert creation** ([ADR 0006](docs/decisions/0006-idempotent-alert-creation.md)): send `Idempotency-Key: <uuid>` and retrying the same request returns the stored `201` (same alert) with `Idempotent-Replayed: true` instead of creating a duplicate; the same key with a different body gives 422, and while the first request is still running, 409.
+
+**Trends are computed by the API**, exactly, so every client shows the same numbers ([ADR 0005](docs/decisions/0005-long-range-trends.md)). These are reference rates; past trends don't predict future rates.
+
+### Decision records
+
+| ADR | Decision |
+|---|---|
+| [0001](docs/decisions/0001-contract-first-openapi.md) | Contract-first API with OpenAPI 3.1, Redocly lint and contract tests |
+| [0002](docs/decisions/0002-error-format-problem-details.md) | Errors as RFC 9457 Problem Details; 400 for parameters, 422 for bodies |
+| [0003](docs/decisions/0003-cursor-pagination.md) | Opaque cursor (keyset) pagination for all lists |
+| [0004](docs/decisions/0004-decimals-as-strings.md) | Rates and thresholds as decimal strings (threshold: up to 10 decimal places) |
+| [0005](docs/decisions/0005-long-range-trends.md) | Long-range windows and server-side trend statistics (volatility uses √365) |
+| [0006](docs/decisions/0006-idempotent-alert-creation.md) | Idempotent alert creation with an `Idempotency-Key` |
+| [0007](docs/decisions/0007-dashboard-endpoints.md) | Dashboard endpoints: biggest movers and latest import run |
+
+Template for new ones: [`docs/decisions/0000-template.md`](docs/decisions/0000-template.md).
+
+### Screenshots
+
+_Placeholders: add the images to `docs/screenshots/` and link them here._
+
+| Screen | File to add |
+|---|---|
+| Dashboard (light) | `docs/screenshots/dashboard-light.png` |
+| Dashboard (dark) | `docs/screenshots/dashboard-dark.png` |
+| Pair detail, 5 years, comparing EUR/USD with EUR/GBP | `docs/screenshots/pair-5y-compare.png` |
+| Rates explorer with filters and pagination | `docs/screenshots/rates-explorer.png` |
+| Alert form showing the API's 422 messages | `docs/screenshots/alerts-422.png` |
+
+### Demo checklist
+
+With the API (`uv run uvicorn fx_explorer.api.app:app --reload`) and the web app (`cd web && npm run dev`) running, open http://localhost:5173:
+
+1. **List with filter + pagination:** **Rates** → add quotes USD and NGN, From `2026-11-01`, **Apply** → the URL holds the filters → **Next ›** / **‹ Previous** (no duplicates; changing a filter returns to page 1).
+2. **Detail view with 5-year trend:** click **EUR/USD** → press **6** (5y) → weekly chart, trend panel (−2.78 %, −0.56 %/year, volatility ~5 %, biggest rise/fall, MA30 vs MA200, "based on 1,825 daily rates"), disclaimer. Try **Compare with → EUR/GBP** and drag the zoom bar.
+3. **Form with API validation errors:** **Alerts** → base EUR, quote EUR, threshold `1,5` → **Create alert** → the API's messages appear under Quote and Threshold.
+4. **Empty state:** **Rates** → From `2030-01-01`, To `2030-12-31` → "No rates match these filters" with the import command.
+5. **Error state:** stop the API → **Retry**-able "Can't reach the API" in the page, plus the banner within a minute. Start it again → **Retry** works.
+6. **Partial history:** `uv run python -m fx_explorer import --backfill --quotes SLE --from 2016-01-01`, then open `/pairs/EUR/SLE?window=5y` → "Only … of data for EUR/SLE (since …); you asked for 5 years." (SLE data starts in 2022.) (`max` never shows this: it always starts at the first available date.)
+7. **Idempotent replay:** in a terminal, run the same request twice:
+   ```bash
+   curl -i -X POST localhost:8000/v1/alerts -H 'Content-Type: application/json' \
+     -H 'Idempotency-Key: demo-1' -d '{"base":"EUR","quote":"USD","condition":"above","threshold":"1.2"}'
+   ```
+   The second response has the **same id** and `idempotent-replayed: true`; **Alerts** shows one alert. Change the threshold with the same key → 422 "key reused with a different request".
 
 ### Running the tests
 
 ```bash
-uv run pytest
+uv run pytest                                   # unit, integration and in-process contract tests
+npx @redocly/cli lint openapi.yaml              # the contract: 0 errors expected
+uv run schemathesis run openapi.yaml --url http://localhost:8000   # contract tests against a running API
+(cd web && npm run build)                       # the web app type-checks against the contract
 ```
 
 Client and parser tests use mocked HTTP responses, so they need no network. Integration tests use the separate `fx_explorer_test` database (from `docker compose up -d`) and are skipped if it isn't running. They refuse to run against any database whose name doesn't end in `_test`.
+
+`tests/api/test_contract.py` runs schemathesis in-process against every operation. [`schemathesis.toml`](schemathesis.toml) lists, with reasons, the few rules a JSON Schema can't express (a cursor must be one we issued, a currency must exist, an idempotent replay may point at a deleted alert).
+
+⚠️ A schemathesis run against your **main** database's API sends real `POST /v1/alerts` requests and leaves idempotency keys behind. Either add `--exclude-operation-id createAlert`, or run the API against the test database: `(set -a; . ./.env; set +a; DATABASE_URL="$TEST_DATABASE_URL" uv run uvicorn fx_explorer.api.app:app --port 8001)`.
 
 ### Looking at the data
 
@@ -163,46 +285,71 @@ This is done in SQL with `INSERT ... ON CONFLICT (rate_date, base, quote) DO UPD
 
 The inserted/updated counts come from `RETURNING (xmax = 0)`: PostgreSQL's hidden `xmax` column is 0 on a freshly inserted row and non-zero on a row updated by `ON CONFLICT`. Unchanged rows return nothing. This is a widely used PostgreSQL idiom rather than an officially documented guarantee, so the integration tests check it.
 
+The importer only stores rates dated **inside the range it asked for**: Frankfurter sometimes adds a currency's last rate *before* `from` (see below), and storing it made yearly backfill chunks overwrite each other.
+
+(The API's `POST /v1/alerts` has its own, different kind of idempotency, via the `Idempotency-Key` header; see ADR 0006.)
+
 ## Handling bad data
 
 One bad record never stops an import. Records are rejected, counted and logged with a reason if, for example, they have a missing field, a rate that is zero or negative, an invalid date or an unknown currency code. If any record is rejected the run is marked `partial`.
 
-Money is stored as `NUMERIC` in the database and handled as Python `Decimal`, never `float`, to avoid rounding errors. Dates are `datetime.date`.
+Money is stored as `NUMERIC` in the database and handled as Python `Decimal`, never `float`, to avoid rounding errors (including in the API's trend maths). The API sends decimals as strings, and the web app displays those strings as they are. Dates are `datetime.date`.
 
 ## Surprises in the data
 
 Things found while testing the real API:
 
 - **Self-pairs are returned.** Asking for rates from EUR includes an EUR → EUR record with rate 1.0. The parser skips these (they are expected, so they are not counted as rejects).
-- **Weekends have rates.** There is one record per calendar day, not just business days, and Saturday and Sunday values differ from Friday's. "Day-to-day change" therefore means calendar day.
+- **Weekends have rates.** There is one record per calendar day, not just business days, and Saturday and Sunday values differ from Friday's. "Day-to-day change" therefore means calendar day. (This is also why the API annualises volatility with √365, not √252.)
 - **Dates can be mixed.** In one "latest" response some currencies (such as crypto) are a day behind others. The newest date available is usually yesterday.
 - **Unknown currency codes give an error (422)**, but a valid pair on a future date simply returns an empty list (200).
 - **Errors have a body** like `{"status": 422, "message": "invalid currency: XXX"}`.
 - **Some fields are empty.** For example, many crypto assets have no ISO numeric code, and one currency (CMD) has no symbol.
-- **Rates can be revised**, because they are blended from several sources. That is why incremental imports overlap by a few days.
+- **Rates can be revised, weeks later.** They are blended from several sources. Re-importing 2026 changed 129 rates dated up to ~5 weeks before the first import, so the 3-day `--incremental` overlap misses most revisions (see Roadmap).
+- **A range can include a rate from before `from`.** If a currency has no rate on the first requested day (NGN on a weekend), Frankfurter adds its last earlier rate, with a different value than that day's own answer. The importer ignores such records.
+- **NGN had weekday-only data until 2021**; every other default currency has all calendar days.
 - **`/currencies` includes metals and crypto**, not only currencies, so the database stores a `type` for each.
 - **No rate-limit headers** are sent. We still retry politely on 429 and 5xx, and wait between requests.
+
+More detail: [`docs/frankfurter-notes.md`](docs/frankfurter-notes.md).
 
 ## Project layout
 
 ```
 fx-explorer/
-├── src/fx_explorer/      application code
+├── openapi.yaml          THE API contract (OpenAPI 3.1, the source of truth)
+├── redocly.yaml          contract lint config
+├── schemathesis.toml     contract-test settings (with reasons)
+├── src/fx_explorer/      importer, repositories, analytics, api/ (FastAPI)
 ├── migrations/           Alembic database migrations (raw SQL)
-├── tests/                unit and integration tests
+├── tests/                unit and integration tests; tests/api/ = endpoint + contract tests
+├── web/                  React app (built only from openapi.yaml)
+├── docs/
+│   ├── api-design.md     API design guidelines
+│   ├── ui-design.md      UI/UX design (design system, wireframes, states)
+│   ├── decisions/        decision records (ADRs 0001–0007)
+│   ├── frankfurter-notes.md  observed Frankfurter facts and data coverage
+│   ├── api.html          rendered contract docs
+│   └── samples/          saved real API responses
 ├── docker/               database init script (creates the test database)
-├── docs/samples/         saved real API responses
 ├── docker-compose.yml    PostgreSQL 16
 ├── pyproject.toml
 └── .env.example
 ```
 
-## What I would do next
+## Roadmap
 
-- Scheduled daily imports (cron or a task scheduler) using `--incremental`.
-- Import several base currencies, not just EUR.
+**Done:** importer with idempotent upserts (Week 1) · multi-year backfill · contract-first REST API with Problem Details, cursor pagination, long-range trends and idempotent alerts · web dashboard (rates explorer, pair detail with trend panel and comparison, alerts, dashboard) · contract tests with schemathesis.
+
+**Next:**
+
+- **Catch late revisions:** raise the `--incremental` overlap (e.g. 45 days) or re-import the last 6 weeks weekly; rates were seen revised ~5 weeks later.
+- Scheduled daily imports (cron or a task scheduler) using `--incremental`, shown on the dashboard's freshness line.
+- **Notify** when an alert triggers (email/web push), not only show it in the list.
+- Expire old idempotency keys (e.g. after 24 h, as Stripe does) and scope keys per user once there are accounts.
+- Import several base currencies, not just EUR; optionally server-side cross rates (would enable a USD → GBP converter).
 - Use the API's `providers` option to compare sources, or use a single central bank's own rates.
-- A small query command or dashboard for charts of rates over time.
-- Alerts when a rate changes by an unusual amount.
 - Count skipped self-pairs in the run summary, and store reject reasons in the database instead of only in the log.
-- Run the tests automatically in CI.
+- Update `ARCHITECTURE.md`, which still describes the Week 1 importer only.
+- Run the tests, the contract lint, schemathesis and the web build automatically in CI.
+- Week 3: an agent that reads the API's trend numbers (never computing them itself).
