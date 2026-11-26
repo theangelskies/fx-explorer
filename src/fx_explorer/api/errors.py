@@ -113,6 +113,16 @@ def _friendly_message(err: dict[str, Any]) -> str:
         return f"Must be at most {ctx.get('max_length')} characters."
     if kind in ("too_short", "too_long"):
         return f"Must contain between {ctx.get('min_length', 1)} and {ctx.get('max_length')} items."
+    if kind == "string_pattern_mismatch":
+        # Import here to avoid a circular import (params.py imports this module).
+        from fx_explorer.api.params import CODE_MESSAGE, CODE_PATTERN, DATE_MESSAGE, DATE_PATTERN
+
+        pattern = ctx.get("pattern")
+        if pattern == CODE_PATTERN:
+            return CODE_MESSAGE
+        if pattern == DATE_PATTERN:
+            return DATE_MESSAGE
+        return "Has an invalid format."
     if kind == "string_type":
         return "Must be a string."
     if kind == "extra_forbidden":
