@@ -1,0 +1,8 @@
+# Redocly CLI configuration: lints openapi.yaml.
+# Run: npx @redocly/cli lint openapi.yaml
+extends:
+  - recommended
+
+apis:
+  main:
+    root: openapi.yaml

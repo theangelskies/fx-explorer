@@ -101,7 +101,7 @@ All errors use **RFC 9457 Problem Details** with media type `application/problem
   "detail": "2 fields are invalid.",
   "instance": "/v1/alerts",
   "errors": [
-    { "field": "threshold", "message": "Must be a number greater than 0 with at most 6 decimal places." },
+    { "field": "threshold", "message": "Must be a number greater than 0 with at most 10 decimal places." },
     { "field": "quote", "message": "Must be different from base." }
   ]
 }

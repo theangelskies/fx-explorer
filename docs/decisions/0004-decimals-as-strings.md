@@ -29,8 +29,8 @@ Applies to: `rate`, `threshold`, `current_rate`, `change_abs`, `change_pct`, `st
 **Format rules (in the contract):**
 - Plain decimal notation only: digits, optional leading `-` (only where negative values make sense, e.g. `change_abs`), optional `.` with digits after it.
 - **Never exponent notation.** `Decimal("0.000017454")` can print as `1.7454E-5` in Python, so the server formats with `format(value, "f")`.
-- Outputs: `type: string`, `format: decimal`, and a `pattern`, plus examples.
-- Input `threshold`: must match `^\d+(\.\d{1,6})?$`, be greater than 0, and have at most 6 decimal places. Violations → 422 with a readable message.
+- Outputs: `type: string` with a `pattern` and examples. (No `format: decimal`: it isn't a standard JSON Schema format, and test-data generators like schemathesis may reject unknown formats. The pattern does the real checking.)
+- Input `threshold`: must match `^\d+(\.\d{1,10})?$`, be greater than 0, and have at most **10** decimal places. Violations → 422 with a readable message. Why 10: the smallest rate in our samples, EUR → BTC `0.000017454`, already has 9 decimal places. 6 would make alerts on crypto and metals impossible to set precisely.
 
 **Rates are returned with the precision we store**, and not padded or rounded. **Computed values** (`avg`, `change_pct`) are rounded on the server to a fixed number of decimal places, defined in the contract, so the server, not each client, decides how they are rounded.
 
