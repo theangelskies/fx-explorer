@@ -147,6 +147,15 @@ class CurrencyRepository:
             )
             return {row[0] for row in rows}
 
+    def start_dates(self, codes: Sequence[str]) -> dict[str, date | None]:
+        """{code: start_date} for the codes that exist (unknown codes are left out)."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT iso_code, start_date FROM currencies WHERE iso_code = ANY(%s)",
+                (list(codes),),
+            )
+            return {code: start for code, start in rows}
+
     def known_codes(self) -> set[str]:
         with self._pool.connection() as conn:
             return {row[0] for row in conn.execute("SELECT iso_code FROM currencies")}
