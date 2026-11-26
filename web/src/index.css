@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/* Dark mode is a class on <html> (set before first paint in index.html, toggled in theme.ts),
+   so `dark:` utilities follow the user's choice, not only the system setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens: docs/ui-design.md §2.1 (contrast ratios are calculated there).
+   Components use the Tailwind names below (bg-surface, text-muted, text-up …), never hex values. */
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --line: #cbd5e1;
+  --line-input: #64748b;
+  --fg: #0f172a;
+  --muted: #475569;
+  --accent: #4f46e5;
+  --on-accent: #ffffff;
+  --up: #166534;
+  --down: #dc2626;
+  --notice-fg: #92400e;
+  --notice-bg: #fffbeb;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #020617;
+  --surface: #0f172a;
+  --line: #334155;
+  --line-input: #64748b;
+  --fg: #f1f5f9;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --on-accent: #020617;
+  --up: #86efac;
+  --down: #f87171;
+  --notice-fg: #fcd34d;
+  --notice-bg: #1c1917;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-line: var(--line);
+  --color-line-input: var(--line-input);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-notice-fg: var(--notice-fg);
+  --color-notice-bg: var(--notice-bg);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+}
+
+body {
+  @apply bg-bg text-fg font-sans antialiased;
+}
+
+/* One visible focus ring for every control (§6). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
