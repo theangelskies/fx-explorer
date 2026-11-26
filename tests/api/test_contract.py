@@ -16,6 +16,7 @@ pytestmark = pytest.mark.integration
 
 IMPLEMENTED = [
     "getHealth", "listCurrencies", "getCurrency", "listRates", "getPair",
+    "listMovers", "getLatestImportRun",
     "createAlert", "listAlerts", "getAlert", "deleteAlert",
 ]
 

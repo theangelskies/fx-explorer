@@ -40,3 +40,10 @@ include-operation-id = "listAlerts"
 checks.positive_data_acceptance.expected-statuses = [
   "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
 ]
+
+# listMovers: `base` must EXIST, so a well-formed but unknown code ("ABC") is a documented 400.
+[[operations]]
+include-operation-id = "listMovers"
+checks.positive_data_acceptance.expected-statuses = [
+  "2xx", "3xx", "401", "403", "404", "409", "429", "5xx", "400",
+]
