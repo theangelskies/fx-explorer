@@ -179,7 +179,7 @@ Wireframes show layout, not data. EUR/USD and EUR/NGN figures are real API value
   show the real period ("since 2019") using the partial-history rule (§5).
 - **Biggest movers / data freshness:** need new endpoints, see §8 (gap G1, G2).
 - **Quick converter:** amount × `latest.rate`, computed as you type (no request per keystroke).
-  The ⇅ button swaps direction (amount ÷ rate). See gap G3 for non-EUR pairs.
+  The ⇅ button swaps direction (amount ÷ rate). Only EUR ↔ X pairs are offered (gap G3, decided).
 
 ### 4.2 Rates explorer (`/rates`)
 
@@ -356,7 +356,7 @@ golden rule, none of these is worked around in the UI: each becomes a contract c
 |---|---|---|---|
 | **G1** | Dashboard "biggest movers today" | No operation returns day changes across all quotes. Calling `getPair` for ~200 currencies is out of the question. | **Add `GET /v1/movers`** (`base` default EUR, `limit`, maybe `direction`): each stored quote's latest rate, previous rate and `change_pct`, sorted by size of move, with each item's own `rate_date` (NGN is often a day behind). Planned for Phase 13 (ADR 0007). |
 | **G2** | Dashboard "data freshness" (last import) | `import_runs` isn't exposed. `Currency.latest_rate_date` gives the newest *rate date*, but not *when* the import ran or whether it failed. | **Add `GET /v1/import-runs/latest`**: `started_at`, `finished_at`, `status` (`running`/`success`/`partial`/`failed`), counts. 404 if no import has run. Planned for Phase 13 (ADR 0007). |
-| **G3** | Converter between two non-EUR currencies (e.g. USD → GBP) | The API serves only stored pairs, so no USD/GBP rate (by design: no cross rates). | **Decision needed (small):** either (a) the converter only offers pairs that exist (EUR ↔ X), the simplest and exactly what the contract offers, or (b) compute a display-only cross rate client-side as `rate(EUR→GBP) ÷ rate(EUR→USD)`, labelled "via EUR". **Recommendation: (a) now**, and (b) only via a contract change (server-side cross rates) if wanted later. |
+| **G3** | Converter between two non-EUR currencies (e.g. USD → GBP) | The API serves only stored pairs, so no USD/GBP rate (by design: no cross rates). | **Decided 2026-11-26: (a).** The converter only offers pairs that exist (EUR ↔ X), exactly what the contract offers. No client-side cross rates; if ever wanted, they come as a contract change (server-side). |
 | G4 | Dashboard makes ~2 × N `getPair` calls (N key pairs: 30d + 5y) | No batch/summary operation. | Acceptable for N ≈ 6 (parallel, cached by TanStack Query). **No change now**; revisit with a summary endpoint if N grows. |
 | G5 | Rates explorer: which currencies have data *as a base*? | `has_rates` counts base **or** quote, so picking USD as base gives an empty result. | Minor: default and suggest `EUR`; the empty state says "Rates are stored with EUR as the base". **No change now.** |
 
