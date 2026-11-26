@@ -92,6 +92,10 @@ def create_alert(
     keys: IdempotencyRepository = Depends(idempotency_repository),
     pool: ConnectionPool = Depends(get_pool),
 ) -> AlertOut | JSONResponse:
+    if isinstance(payload, (bytes, bytearray)):
+        # FastAPI only parses JSON when Content-Type says JSON; otherwise we get raw bytes.
+        raise ProblemError("validation-error", count_detail(1, "field"), [field_error(
+            "body", "Request body must be JSON, sent with Content-Type: application/json.")])
     if idempotency_key is None:  # no key: plain, non-idempotent create
         body = _validate(payload, currencies, rates)
         alert = alerts.create(base=body.base, quote=body.quote, condition=body.condition,

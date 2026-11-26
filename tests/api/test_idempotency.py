@@ -155,3 +155,14 @@ def test_request_hash_ignores_formatting_but_not_values():
     assert request_hash({"a": 1, "b": "x"}) == request_hash({"b": "x", "a": 1})
     assert request_hash({"a": 1}) != request_hash({"a": 2})
     assert request_hash({"note": None}) != request_hash({})  # null is a value
+
+
+@pytest.mark.parametrize("key", [KEY, None])
+def test_non_json_content_type_is_422_not_a_crash(seeded, pool, key):
+    """Found by schemathesis: text/plain bodies arrive as bytes and crashed the hashing."""
+    headers = {"content-type": "text/plain", **({"Idempotency-Key": key} if key else {})}
+    resp = seeded.post("/v1/alerts", content=b'{"base": "EUR"}', headers=headers)
+    assert resp.status_code == 422
+    assert resp.json()["errors"] == [{"field": "body", "message":
+                                      "Request body must be JSON, sent with Content-Type: application/json."}]
+    assert IdempotencyRepository(pool).get(KEY) is None
