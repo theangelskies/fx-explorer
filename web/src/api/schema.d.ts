@@ -125,6 +125,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/movers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the biggest day-over-day moves
+         * @description For every quote currency stored against `base`, compares its **latest stored rate**
+         *     with the stored rate before it, and returns the biggest moves first (by size of
+         *     `change_pct`, ties by `quote` A→Z). See ADR 0007.
+         *
+         *     "Latest" is per quote: each item carries its own `rate_date`, because currencies are
+         *     not always updated on the same day (e.g. NGN is often a day behind).
+         *
+         *     Quotes with fewer than two stored rates are left out. A known `base` with no rates
+         *     gives `200` with `"data": []`. This is a ranking (top `limit`), not a paginated
+         *     collection, so there is no cursor.
+         */
+        get: operations["listMovers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/import-runs/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the most recent import run
+         * @description The import run that started most recently, whatever its outcome: it may still be
+         *     `running`, or have `failed`. Use it to show how fresh the data is. See ADR 0007.
+         *     Returns **404** if no import has ever run.
+         */
+        get: operations["getLatestImportRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/alerts": {
         parameters: {
             query?: never;
@@ -410,6 +461,54 @@ export interface components {
              */
             series: components["schemas"]["SeriesPoint"][];
         };
+        /** @description One quote's latest stored rate compared with the stored rate before it. */
+        Mover: {
+            quote: components["schemas"]["CurrencyCode"];
+            /**
+             * Format: date
+             * @description Date of this quote's latest stored rate (may differ between quotes).
+             */
+            rate_date: string;
+            rate: components["schemas"]["PositiveDecimal"];
+            /**
+             * Format: date
+             * @description Date of the stored rate just before `rate_date`.
+             */
+            previous_rate_date: string;
+            previous_rate: components["schemas"]["PositiveDecimal"];
+            /** @description `rate − previous_rate`, exact. */
+            change_abs: components["schemas"]["SignedDecimal"];
+            /** @description `(rate / previous_rate − 1) × 100`, rounded to 4 decimal places (half to even). */
+            change_pct: components["schemas"]["SignedDecimal"];
+        };
+        MoverList: {
+            base: components["schemas"]["CurrencyCode"];
+            /** @description Biggest moves first (by absolute `change_pct`, ties by `quote`). */
+            data: components["schemas"]["Mover"][];
+        };
+        /** @description One run of the importer (`python -m fx_explorer import …`). */
+        ImportRun: {
+            id: number;
+            /**
+             * @description `partial` = finished, but some records were rejected. `failed` = stopped with an error.
+             * @enum {string}
+             */
+            status: "running" | "success" | "partial" | "failed";
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description `null` while the run is still `running`.
+             */
+            finished_at: string | null;
+            /** @description Rate records received from Frankfurter. */
+            fetched: number;
+            inserted: number;
+            updated: number;
+            rejected: number;
+            /** @description Why the run failed. `null` unless `status` is `failed`. */
+            error_message: string | null;
+        };
         /**
          * @description `above`: triggered when the rate is ≥ threshold. `below`: triggered when the rate is ≤ threshold.
          * @enum {string}
@@ -587,6 +686,10 @@ export interface components {
          *     that rate. Only `series` is down-sampled: `stats` and `trend` always use every daily rate.
          */
         Interval: components["schemas"]["SeriesInterval"];
+        /** @description How many moves to return (the biggest first). Values outside 1–50 give 400. */
+        MoversLimit: number;
+        /** @description `up`: only rises. `down`: only falls. Omit for both (unchanged rates included). */
+        MoverDirection: "up" | "down";
         /** @description `triggered`: only alerts whose threshold has been reached. `waiting`: only those not yet reached. Omit for all. */
         AlertStatus: "triggered" | "waiting";
         /** @description Alert id (UUID). A malformed id gives 400. */
@@ -788,6 +891,59 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listMovers: {
+        parameters: {
+            query?: {
+                /** @description Base currency. Must be a known currency, otherwise 400. */
+                base?: components["parameters"]["Base"];
+                /** @description How many moves to return (the biggest first). Values outside 1–50 give 400. */
+                limit?: components["parameters"]["MoversLimit"];
+                /** @description `up`: only rises. `down`: only falls. Omit for both (unchanged rates included). */
+                direction?: components["parameters"]["MoverDirection"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The biggest moves, largest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoverList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getLatestImportRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The most recent import run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRun"];
+                };
+            };
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
