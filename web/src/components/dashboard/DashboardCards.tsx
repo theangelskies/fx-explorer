@@ -11,6 +11,7 @@ import { direction, formatDate, formatDateTime, formatDecimal, formatRelative } 
 import { Card } from "../Card";
 import { Change } from "../Change";
 import { EmptyState } from "../EmptyState";
+import { FlashOnChange } from "../FlashOnChange";
 import { ErrorState } from "../ErrorState";
 import { Loading, Skeleton } from "../Loading";
 import { Disclaimer } from "../Notices";
@@ -74,7 +75,7 @@ export function KpiCard({ quote }: { quote: string }) {
   const pair = usePair(BASE, quote, "30d");
   return (
     <Link to={`/pairs/${BASE}/${quote}`}
-      className="block rounded-xl border border-line bg-surface p-4 shadow-sm transition hover:border-accent dark:shadow-none">
+      className="block rounded-xl border border-line bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-accent hover:shadow-md dark:shadow-none">
       <p className="text-xs font-semibold text-muted">{BASE}/{quote}</p>
       {pair.isPending ? (
         <div className="mt-2 space-y-2"><Skeleton className="h-7 w-24" /><Skeleton className="h-4 w-20" /><Skeleton className="h-8 w-full" /></div>
@@ -82,7 +83,9 @@ export function KpiCard({ quote }: { quote: string }) {
         <p className="mt-2 text-sm text-down">{describeError(pair.error).title}</p>
       ) : (
         <>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">{formatDecimal(pair.data.latest.rate)}</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">
+            <FlashOnChange value={pair.data.latest.rate}>{formatDecimal(pair.data.latest.rate)}</FlashOnChange>
+          </p>
           <p className="text-xs text-muted">
             {pair.data.change_pct ? <Change pct={pair.data.change_pct} decimals={2} /> : "—"}{" "}
             <span title={pair.data.previous ? `vs ${formatDate(pair.data.previous.rate_date)}` : undefined}>

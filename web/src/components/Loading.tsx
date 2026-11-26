@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 /** A grey placeholder block shaped like the content that's coming. */
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden="true" className={`animate-pulse rounded-md bg-line/60 ${className}`} />;
+  return <div aria-hidden="true" className={`skeleton rounded-md ${className}`} />;
 }
 
 interface LoadingProps {

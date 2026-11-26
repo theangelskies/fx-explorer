@@ -19,6 +19,7 @@
   --down: #dc2626;
   --notice-fg: #92400e;
   --notice-bg: #fffbeb;
+  --compare: #b45309; /* 2nd chart line: 5.02:1 on surface; also dashed + labelled */
   color-scheme: light;
 }
 
@@ -35,6 +36,7 @@
   --down: #f87171;
   --notice-fg: #fcd34d;
   --notice-bg: #1c1917;
+  --compare: #fbbf24; /* 10.69:1 on surface */
   color-scheme: dark;
 }
 
@@ -51,12 +53,48 @@
   --color-down: var(--down);
   --color-notice-fg: var(--notice-fg);
   --color-notice-bg: var(--notice-bg);
+  --color-compare: var(--compare);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
 }
 
 body {
   @apply bg-bg text-fg font-sans antialiased;
+}
+
+/* Skeleton shimmer: a soft highlight sweeping across placeholders. Static under reduced motion. */
+.skeleton {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--line) 55%, transparent) 25%,
+      color-mix(in srgb, var(--line) 85%, transparent) 50%,
+      color-mix(in srgb, var(--line) 55%, transparent) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* A value that just changed gets a brief highlight (see <FlashOnChange>). */
+.flash {
+  animation: flash 1.2s ease-out;
+}
+@keyframes flash {
+  from { background-color: color-mix(in srgb, var(--accent) 22%, transparent); }
+  to { background-color: transparent; }
+}
+
+/* Press feedback on every button (a tiny shrink); motion is removed under reduced motion. */
+button:not(:disabled) {
+  transition: transform 80ms ease-out;
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Native <dialog> backdrop. */
+dialog::backdrop {
+  background: rgb(2 6 23 / 0.5);
 }
 
 /* One visible focus ring for every control (§6). */

@@ -42,6 +42,7 @@ formula); every text colour passes AA (≥ 4.5:1) on both `surface` and `bg`.
 | `up` | rise ▲ | `#166534` (green-800) | 7.13 | `#86efac` (green-300) | 12.71 |
 | `down` | fall ▼ | `#dc2626` (red-600) | 4.83 | `#f87171` (red-400) | 6.45 |
 | `notice` | partial-history / disclaimer text | `#92400e` on `#fffbeb` | 6.84 | `#fcd34d` on `#1c1917` | 12.13 |
+| `compare` | second line in "compare two pairs" (always dashed + labelled, since it's close to `accent` in lightness) | `#b45309` (amber-700) | 5.02 | `#fbbf24` (amber-400) | 10.69 |
 
 **Up/down are told apart three ways:** hue, **lightness** (light mode: up is darker than down,
 relative luminance 0.097 vs 0.167; dark mode: up is lighter, 0.698 vs 0.330), and always a
@@ -322,6 +323,19 @@ rest of the page still works. Errors are never shown as raw JSON.
 - **Motion:** subtle transitions (≤ 200 ms) only; disabled under `prefers-reduced-motion`.
 - **Language:** plain words ("per year", not "CAGR"; "how bumpy" explained in a tooltip for volatility).
 
+### 6.1 Interactive extras (Phase 14)
+
+| Extra | Where | Accessibility |
+|---|---|---|
+| **Compare two pairs** (`?compare=GBP`): both as % change since the chart's start, same window and point spacing | Pair detail | Lines differ by colour **and** pattern (solid / dashed), named in legend and tooltip; chart has a text summary |
+| **Zoom bar** (Recharts Brush) under charts with > 60 points | Pair detail, dashboard chart | Mouse/touch; the window toggle (and keys 1–7) is the keyboard way to change range |
+| **Keyboard shortcuts**: `/` go-to, `g d`/`g r`/`g a`, `1`–`7` windows, `?` help | Everywhere | Never fire while typing or in a dialog; listed in the `?` dialog and the footer |
+| **Quick switcher** ("Go to…") | Header button or `/` | Native `<dialog>` (focus trap, Esc, focus return); ARIA combobox + listbox |
+| **Skeleton shimmer** | All loading states | Static under `prefers-reduced-motion` |
+| **Highlight on change** (instead of count-up numbers, which would show rates that never existed) | KPI values, latest rate, trend change | CSS animation, skipped under reduced motion |
+| **Copy rate** (exact string) | Pair detail | Live "Copied ✓" text |
+| **Press/hover feedback** | Buttons, KPI cards | ≤ 200 ms; removed under reduced motion |
+
 ## 7. API operations per page
 
 | Page | Operation (`operationId`) | Used for |
@@ -337,6 +351,7 @@ rest of the page still works. Errors are never shown as raw JSON.
 | Rates explorer | `listCurrencies` (`has_rates=true`) | base/quote options |
 | | `listRates` | table, filters, cursor pagination |
 | Pair detail | `getPair` (`window`, optional `interval`) | header, chart, trend panel, partial history |
+| | `getPair` (same `window`, `interval` = main pair's `series_interval`) | "compare with" line (Phase 14) |
 | | `getCurrency` × 2 | full names in the title |
 | | `listRates` (`quotes=<quote>`, `limit=10`) | recent rates table |
 | Alerts | `listCurrencies` (`has_rates=true`) | pair selects |
