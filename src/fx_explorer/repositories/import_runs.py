@@ -50,3 +50,9 @@ class ImportRunRepository:
         with self._pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute("SELECT * FROM import_runs WHERE id = %s", (run_id,))
             return cur.fetchone()
+
+    def latest(self) -> dict[str, Any] | None:
+        """The run that started most recently (any status), or None if nothing ever ran."""
+        with self._pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM import_runs ORDER BY started_at DESC, id DESC LIMIT 1")
+            return cur.fetchone()

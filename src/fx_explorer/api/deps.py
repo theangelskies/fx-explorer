@@ -12,6 +12,7 @@ from fx_explorer.repositories.alerts import AlertRepository
 from fx_explorer.repositories.currencies import CurrencyRepository
 from fx_explorer.repositories.health import HealthRepository
 from fx_explorer.repositories.idempotency import IdempotencyRepository
+from fx_explorer.repositories.import_runs import ImportRunRepository
 from fx_explorer.repositories.rates import RateRepository
 
 
@@ -37,3 +38,7 @@ def alert_repository(request: Request) -> AlertRepository:
 
 def idempotency_repository(request: Request) -> IdempotencyRepository:
     return IdempotencyRepository(get_pool(request))
+
+
+def import_run_repository(request: Request) -> ImportRunRepository:
+    return ImportRunRepository(get_pool(request))

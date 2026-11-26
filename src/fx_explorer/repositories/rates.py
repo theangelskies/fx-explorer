@@ -71,6 +71,17 @@ class PairHistory:
     series: list[RatePoint]  # chart points: daily, or last rate per week/month
 
 
+@dataclass(frozen=True)
+class LatestMove:
+    """A quote's latest stored rate and the stored rate just before it (for listMovers)."""
+
+    quote: str
+    rate_date: date
+    rate: Decimal
+    previous_rate_date: date
+    previous_rate: Decimal
+
+
 # date_trunc units for down-sampling. Fixed strings only: they are put into the SQL text
 # (DISTINCT ON and ORDER BY must contain the exact same expression), never user input.
 _TRUNC_UNITS = {"week": "week", "month": "month"}  # PostgreSQL weeks are ISO: Monday-Sunday
@@ -258,3 +269,30 @@ class RateRepository:
             recent=recent,
             series=series,
         )
+
+    def latest_moves(self, base: str) -> list[LatestMove]:
+        """For every quote stored against `base` with at least two rates: its latest rate and
+        the one before it. "Latest" is per quote (quotes aren't always updated on the same day).
+
+        row_number() numbers each quote's rates newest first; rank 1 is the latest, rank 2 the
+        previous one. This reads every rate of the base once (~23,000 rows today), which is fast;
+        see ADR 0007 for the alternative if history grows a lot.
+        """
+        with self._pool.connection() as conn, conn.cursor(row_factory=class_row(LatestMove)) as cur:
+            return cur.execute(
+                """
+                WITH ranked AS (
+                    SELECT quote, rate_date, rate,
+                           row_number() OVER (PARTITION BY quote ORDER BY rate_date DESC) AS rn
+                    FROM exchange_rates
+                    WHERE base = %s
+                )
+                SELECT latest.quote, latest.rate_date, latest.rate,
+                       prev.rate_date AS previous_rate_date, prev.rate AS previous_rate
+                FROM ranked latest
+                JOIN ranked prev ON prev.quote = latest.quote AND prev.rn = 2
+                WHERE latest.rn = 1
+                ORDER BY latest.quote
+                """,
+                (base,),
+            ).fetchall()

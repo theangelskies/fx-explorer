@@ -211,3 +211,40 @@ class AlertOut(BaseModel):
     created_at: UtcDateTime
     current_rate: DecimalStr | None
     triggered: bool
+
+
+# --------------------------------------------------------------------- movers
+
+class MoverOut(BaseModel):
+    """#/components/schemas/Mover"""
+
+    quote: str
+    rate_date: date
+    rate: DecimalStr
+    previous_rate_date: date
+    previous_rate: DecimalStr
+    change_abs: DecimalStr
+    change_pct: DecimalStr
+
+
+class MoverListOut(BaseModel):
+    """#/components/schemas/MoverList"""
+
+    base: str
+    data: list[MoverOut]
+
+
+# ---------------------------------------------------------------- import runs
+
+class ImportRunOut(BaseModel):
+    """#/components/schemas/ImportRun"""
+
+    id: int
+    status: Literal["running", "success", "partial", "failed"]
+    started_at: UtcDateTime
+    finished_at: UtcDateTime | None
+    fetched: int
+    inserted: int
+    updated: int
+    rejected: int
+    error_message: str | None
