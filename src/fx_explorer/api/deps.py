@@ -8,6 +8,7 @@ Tests build the app with their own pool, so routes never know which database the
 from fastapi import Request
 from psycopg_pool import ConnectionPool
 
+from fx_explorer.repositories.alerts import AlertRepository
 from fx_explorer.repositories.currencies import CurrencyRepository
 from fx_explorer.repositories.health import HealthRepository
 from fx_explorer.repositories.rates import RateRepository
@@ -27,3 +28,7 @@ def currency_repository(request: Request) -> CurrencyRepository:
 
 def rate_repository(request: Request) -> RateRepository:
     return RateRepository(get_pool(request))
+
+
+def alert_repository(request: Request) -> AlertRepository:
+    return AlertRepository(get_pool(request))

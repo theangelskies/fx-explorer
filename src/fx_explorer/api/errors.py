@@ -140,32 +140,47 @@ def _friendly_message(err: dict[str, Any]) -> str:
     return str(err.get("msg", "Invalid value."))
 
 
-def _field_name(loc: tuple[Any, ...]) -> str:
-    """("query", "limit") -> "limit"; ("body", "threshold") -> "threshold"; ("body",) -> "body"."""
-    rest = [str(part) for part in loc[1:]]
+def _field_name(loc: tuple[Any, ...], has_prefix: bool = True) -> str:
+    """("query", "limit") -> "limit"; ("body", "threshold") -> "threshold"; ("body",) -> "body".
+
+    has_prefix=False for errors from Model.model_validate(), whose loc has no "body"/"query" part.
+    """
+    rest = [str(part) for part in (loc[1:] if has_prefix else loc)]
     return ".".join(rest) if rest else "body"
+
+
+def friendly_field_errors(raw: list[dict[str, Any]], has_prefix: bool = True) -> list[dict[str, str]]:
+    """Pydantic errors -> [{field, message}], one entry per field (the first problem is enough)."""
+    errors: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for e in raw:
+        # json_invalid's loc holds a character position, not a field: the whole body is bad.
+        if e.get("type") == "json_invalid":
+            field = "body"
+        else:
+            field = _field_name(tuple(e["loc"]), has_prefix)
+        if field in seen:
+            continue
+        seen.add(field)
+        message = _friendly_message(e)
+        if field == "body" and e.get("type") == "missing":
+            message = "Request body is required."
+        errors.append(field_error(field, message))
+    return errors
+
+
+def count_detail(n: int, what: str) -> str:
+    """'1 field is invalid.' / '3 parameters are invalid.'"""
+    return f"{n} {what}{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} invalid."
 
 
 async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     raw = list(exc.errors())
     # Parameters (query/path/header) -> 400; body -> 422. A malformed URL is reported first.
     param_errors = [e for e in raw if e["loc"] and e["loc"][0] in ("query", "path", "header")]
-    chosen = param_errors or raw
     problem_type = "invalid-parameters" if param_errors else "validation-error"
-
-    errors: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for e in chosen:
-        # json_invalid's loc holds a character position, not a field: the whole body is bad.
-        field = "body" if e.get("type") == "json_invalid" else _field_name(tuple(e["loc"]))
-        if field in seen:  # one entry per field: the first problem is enough to fix it
-            continue
-        seen.add(field)
-        errors.append(field_error(field, _friendly_message(e)))
-
-    n = len(errors)
-    what = "parameter" if param_errors else "field"
-    detail = f"{n} {what}{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} invalid."
+    errors = friendly_field_errors(param_errors or raw)
+    detail = count_detail(len(errors), "parameter" if param_errors else "field")
     return problem_response(request, problem_type, detail, errors)
 
 

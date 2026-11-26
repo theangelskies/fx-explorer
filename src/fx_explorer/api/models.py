@@ -10,11 +10,13 @@ Two serialisation rules from the contract live here:
 - Timestamps go out in UTC with a "Z" (docs/api-design.md, section 9).
 """
 
+import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Annotated, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
+from uuid import UUID
 
-from pydantic import BaseModel, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 
 def _decimal_str(value: Decimal) -> str:
@@ -149,3 +151,63 @@ class PairDetailOut(BaseModel):
     stats: PairStatsOut | None
     trend: PairTrendOut | None
     series: list[SeriesPointOut]
+
+
+# --------------------------------------------------------------------- alerts
+
+# Threshold: digits, optionally a dot and 1-10 decimals (contract: Threshold). "Greater than 0"
+# is checked on the Decimal value (the contract's regex does it with a lookahead, which the
+# regex engine pydantic uses doesn't support).
+THRESHOLD_PATTERN = r"^[0-9]+(\.[0-9]{1,10})?$"
+THRESHOLD_MESSAGE = 'Must be a number greater than 0 with at most 10 decimal places, e.g. "1.2500".'
+AlertCondition = Literal["above", "below"]
+
+
+class AlertCreateIn(BaseModel):
+    """#/components/schemas/AlertCreate: checks the SHAPE of the body.
+
+    Rules that need the database (currencies exist, the pair has rates) and the cross-field
+    rule (quote != base) are checked in the route, so all problems are reported together.
+    """
+
+    model_config = ConfigDict(extra="forbid")  # unknown fields -> 422 "Unknown field."
+
+    base: str
+    quote: str
+    condition: AlertCondition
+    # Any, so a JSON number (1.2) gets our helpful message instead of "Must be a string".
+    threshold: Any
+    note: str | None = Field(default=None, max_length=200)
+
+    @field_validator("base", "quote")
+    @classmethod
+    def _code_format(cls, value: str) -> str:
+        from fx_explorer.api.params import CODE_MESSAGE, CODE_PATTERN  # avoid import cycle
+
+        if not re.fullmatch(CODE_PATTERN, value):
+            raise ValueError(CODE_MESSAGE)
+        return value
+
+    @field_validator("threshold")
+    @classmethod
+    def _threshold(cls, value: Any) -> Decimal:
+        if not isinstance(value, str) or len(value) > 40 or not re.fullmatch(THRESHOLD_PATTERN, value):
+            raise ValueError(THRESHOLD_MESSAGE)
+        number = Decimal(value)
+        if number <= 0:
+            raise ValueError(THRESHOLD_MESSAGE)
+        return number
+
+
+class AlertOut(BaseModel):
+    """#/components/schemas/Alert"""
+
+    id: UUID
+    base: str
+    quote: str
+    condition: AlertCondition
+    threshold: DecimalStr
+    note: str | None
+    created_at: UtcDateTime
+    current_rate: DecimalStr | None
+    triggered: bool
