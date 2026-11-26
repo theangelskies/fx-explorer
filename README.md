@@ -90,6 +90,23 @@ Settings live in `.env`:
 | `DEFAULT_BASE` | Base currency (default EUR) |
 | `DEFAULT_QUOTES` | Currencies to import by default (default USD,GBP,NGN,JPY,CHF,CAD) |
 
+### Running the API
+
+```bash
+uv run alembic upgrade head                        # once, after pulling new migrations
+uv run uvicorn fx_explorer.api.app:app --reload    # http://localhost:8000
+```
+
+- `GET /v1/health`: `{"status":"ok","database":"ok"}`, or a 503 Problem if the database is down.
+- `/openapi.yaml`: the API contract (the hand-written file from the repo root).
+- `/docs`: Swagger UI for that contract.
+
+Contract test against the running server (another terminal):
+
+```bash
+uv run schemathesis run openapi.yaml --url http://localhost:8000 --include-operation-id getHealth
+```
+
 ### Running the tests
 
 ```bash
