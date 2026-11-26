@@ -181,3 +181,23 @@ def test_concurrent_claims_only_one_wins(keys):
     for t in threads:
         t.join()
     assert results.count(True) == 1 and results.count(False) == 9
+
+
+def test_stale_in_progress_key_can_be_taken_over(keys, pool):
+    """A server that crashed mid-request leaves 'in_progress' behind; after 60 s it's free."""
+    keys.claim("crashed", "old-hash")
+    assert keys.claim("crashed", "new-hash").claimed is False  # fresh: still in progress
+    with pool.connection() as conn:
+        conn.execute("UPDATE idempotency_keys SET created_at = now() - interval '61 seconds' "
+                     "WHERE key = 'crashed'")
+    assert keys.claim("crashed", "new-hash").claimed is True
+    assert keys.get("crashed").request_hash == "new-hash"
+
+
+def test_completed_key_is_never_taken_over(keys, pool):
+    keys.claim("done", "h")
+    keys.complete("done", 201, {"id": "x"})
+    with pool.connection() as conn:
+        conn.execute("UPDATE idempotency_keys SET created_at = now() - interval '1 day'")
+    claim = keys.claim("done", "other")
+    assert claim.claimed is False and claim.existing.status == "completed"

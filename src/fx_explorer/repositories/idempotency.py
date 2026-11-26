@@ -43,12 +43,17 @@ class IdempotencyRepository:
     def __init__(self, pool: ConnectionPool) -> None:
         self._pool = pool
 
-    def claim(self, key: str, request_hash: str) -> Claim:
+    def claim(self, key: str, request_hash: str, stale_after_seconds: float = 60) -> Claim:
         """Atomically claim `key` for this request, or return what is already stored.
 
-        INSERT ... ON CONFLICT DO NOTHING is atomic: if two requests with the same key arrive
-        together, the primary key guarantees exactly one INSERT succeeds; the other gets no
-        row back and reads the winner's record instead.
+        INSERT ... ON CONFLICT is atomic: if two requests with the same key arrive together,
+        the primary key guarantees exactly one of them gets the row; the other gets no row
+        back and reads the winner's record instead.
+
+        Stale keys: if a server crashed mid-request, its key would stay 'in_progress' forever
+        and every retry would get 409. So an 'in_progress' key older than
+        `stale_after_seconds` may be taken over (the ON CONFLICT ... DO UPDATE ... WHERE).
+        Completed keys are never taken over.
         """
         # The loop covers one rare race: the existing row is released (deleted) between our
         # INSERT and our SELECT. Then we simply try to claim it again.
@@ -56,8 +61,13 @@ class IdempotencyRepository:
             with self._pool.connection() as conn:
                 inserted = conn.execute(
                     "INSERT INTO idempotency_keys (key, request_hash, status) "
-                    "VALUES (%s, %s, 'in_progress') ON CONFLICT (key) DO NOTHING RETURNING key",
-                    (key, request_hash),
+                    "VALUES (%s, %s, 'in_progress') "
+                    "ON CONFLICT (key) DO UPDATE "
+                    "  SET request_hash = EXCLUDED.request_hash, created_at = now() "
+                    "  WHERE idempotency_keys.status = 'in_progress' "
+                    "    AND idempotency_keys.created_at < now() - make_interval(secs => %s) "
+                    "RETURNING key",
+                    (key, request_hash, stale_after_seconds),
                 ).fetchone()
                 if inserted is not None:
                     return Claim(claimed=True)

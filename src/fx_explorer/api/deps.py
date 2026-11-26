@@ -11,6 +11,7 @@ from psycopg_pool import ConnectionPool
 from fx_explorer.repositories.alerts import AlertRepository
 from fx_explorer.repositories.currencies import CurrencyRepository
 from fx_explorer.repositories.health import HealthRepository
+from fx_explorer.repositories.idempotency import IdempotencyRepository
 from fx_explorer.repositories.rates import RateRepository
 
 
@@ -32,3 +33,7 @@ def rate_repository(request: Request) -> RateRepository:
 
 def alert_repository(request: Request) -> AlertRepository:
     return AlertRepository(get_pool(request))
+
+
+def idempotency_repository(request: Request) -> IdempotencyRepository:
+    return IdempotencyRepository(get_pool(request))

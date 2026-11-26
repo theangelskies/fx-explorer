@@ -12,15 +12,25 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Response
+from fastapi.responses import JSONResponse
+from psycopg_pool import ConnectionPool
 from pydantic import ValidationError
 
-from fx_explorer.api.deps import alert_repository, currency_repository, rate_repository
+from fx_explorer.api import idempotency
+from fx_explorer.api.deps import (
+    alert_repository,
+    currency_repository,
+    get_pool,
+    idempotency_repository,
+    rate_repository,
+)
 from fx_explorer.api.errors import ProblemError, count_detail, field_error, friendly_field_errors
 from fx_explorer.api.models import AlertCreateIn, AlertOut, Page, PageInfo
 from fx_explorer.api.pagination import decode_cursor, encode_cursor, invalid_cursor
 from fx_explorer.api.params import CODE_PATTERN
 from fx_explorer.repositories.alerts import Alert, AlertRepository
 from fx_explorer.repositories.currencies import CurrencyRepository
+from fx_explorer.repositories.idempotency import IdempotencyRepository
 from fx_explorer.repositories.rates import RateRepository
 
 router = APIRouter(tags=["Alerts"])
@@ -75,17 +85,44 @@ def _validate(
 def create_alert(
     response: Response,
     payload: Any = Body(...),
-    # Accepted and length-checked now (contract); the replay behaviour is ADR 0006 / Phase 10.
     idempotency_key: str | None = Header(None, alias="Idempotency-Key", min_length=1, max_length=255),
     alerts: AlertRepository = Depends(alert_repository),
     currencies: CurrencyRepository = Depends(currency_repository),
     rates: RateRepository = Depends(rate_repository),
-) -> AlertOut:
-    body = _validate(payload, currencies, rates)
-    alert = alerts.create(base=body.base, quote=body.quote, condition=body.condition,
-                          threshold=body.threshold, note=body.note)
-    response.headers["Location"] = f"/v1/alerts/{alert.id}"
-    return _out(alert)
+    keys: IdempotencyRepository = Depends(idempotency_repository),
+    pool: ConnectionPool = Depends(get_pool),
+) -> AlertOut | JSONResponse:
+    if idempotency_key is None:  # no key: plain, non-idempotent create
+        body = _validate(payload, currencies, rates)
+        alert = alerts.create(base=body.base, quote=body.quote, condition=body.condition,
+                              threshold=body.threshold, note=body.note)
+        response.headers["Location"] = _location(alert.id)
+        return _out(alert)
+
+    # With a key (ADR 0006): replay, 409 or 422 happen inside begin().
+    replay = idempotency.begin(keys, idempotency_key, payload,
+                               location_for=lambda stored: _location(stored["id"]))
+    if replay is not None:
+        return replay
+    try:
+        body = _validate(payload, currencies, rates)
+        # ONE transaction: the alert and the stored response are saved together or not at all,
+        # so a crash can't leave an alert whose key would let a retry create a second one.
+        with pool.connection() as conn:
+            alert = alerts.create(base=body.base, quote=body.quote, condition=body.condition,
+                                  threshold=body.threshold, note=body.note, conn=conn)
+            out = _out(alert)
+            keys.complete(idempotency_key, 201, out.model_dump(mode="json"), conn=conn)
+    except BaseException:
+        # Validation error or crash: nothing was stored, so free the key for a retry.
+        keys.release(idempotency_key)
+        raise
+    response.headers["Location"] = _location(alert.id)
+    return out
+
+
+def _location(alert_id: object) -> str:
+    return f"/v1/alerts/{alert_id}"
 
 
 def _decode_alerts_cursor(cursor: str) -> tuple[datetime, UUID]:
