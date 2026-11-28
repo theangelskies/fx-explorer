@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     default_base: str = "EUR"
     # NoDecode: don't try to read this value as JSON; our validator below splits the commas.
     default_quotes: Annotated[list[str], NoDecode] = ["USD", "GBP", "NGN", "JPY", "CHF", "CAD"]
+
+    # --- Week 3: the "Ask your data" agent ---
+    # SecretStr: printing or logging the settings shows "**********", never the key.
+    anthropic_api_key: SecretStr | None = None
+    agent_model: str = "claude-sonnet-5-5"
+    agent_dev_model: str = "claude-haiku-5-5"  # cheaper, for manual tries (--dev)
+    agent_max_steps: int = 8
+    agent_api_base_url: str = "http://localhost:8000"  # the agent calls OUR API here
 
     @field_validator("default_quotes", mode="before")
     @classmethod
