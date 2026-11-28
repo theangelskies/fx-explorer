@@ -1,0 +1,1371 @@
+openapi: 3.1.0
+
+info:
+  title: fx-explorer API
+  version: 1.0.0
+  summary: Read exchange rates imported from Frankfurter, and manage rate alerts.
+  description: |
+    The REST API of **fx-explorer**. It serves exchange rates that the importer has
+    already stored in PostgreSQL. It never calls Frankfurter itself, so the data is only
+    as fresh as the latest import.
+
+    This file is the **contract**: it is written before the code, and when the code and
+    this file disagree, the code is wrong.
+
+    ## Conventions
+    - All paths start with `/v1`. JSON fields and query parameters are `snake_case`.
+    - **Decimals are strings** (`"1.1005"`), never JSON numbers, so no precision is lost.
+      See ADR 0004.
+    - **Dates** are `YYYY-MM-DD`. **Timestamps** are RFC 3339 in UTC (`2026-11-21T08:15:30Z`).
+    - **Every documented response field is always present.** Missing values are `null`.
+    - **Lists** use cursor pagination: pass `page.next_cursor` back as `cursor`. It is `null`
+      on the last page. See ADR 0003.
+    - **Errors** use RFC 9457 Problem Details (`application/problem+json`). Invalid query or
+      path parameters give **400**, an invalid request body gives **422**. See ADR 0002.
+    - **Currency codes** are 3–4 uppercase letters (`USD`, `XAU`, `USDT`) and are matched
+      exactly (no lowercase).
+    - Only rates the importer stored are served. No cross rates are calculated (if only
+      EUR-based rates were imported, `USD/GBP` has no data).
+    - **Trend numbers are computed by the server** from stored daily rates, with the formulas
+      written in the schemas (ADR 0005). They describe the past: these are reference rates,
+      and past trends don't predict future rates.
+
+servers:
+  - url: /
+    description: Same host that serves this file (e.g. http://localhost:8000 in development)
+
+security: []
+
+tags:
+  - name: Health
+    description: Is the API up, and can it reach its database?
+  - name: Currencies
+    description: Currencies, precious metals and crypto assets known to the importer.
+  - name: Rates
+    description: Daily exchange rates stored by the importer (one per day per pair, weekends included).
+  - name: Pairs
+    description: A summary of one currency pair over a time window, for detail views and charts.
+  - name: Alerts
+    description: |
+      Rate alerts: "tell me when EUR/USD goes above 1.2000". An alert is *triggered* when the
+      latest stored rate has reached its threshold. Creating an alert supports an optional
+      `Idempotency-Key` header so retries never create duplicates (ADR 0006).
+
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      summary: Check API and database health
+      description: Returns 200 when the API can query the database, otherwise 503.
+      tags: [Health]
+      responses:
+        '200':
+          description: The API and its database are working.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                ok:
+                  $ref: '#/components/examples/HealthOk'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/currencies:
+    get:
+      operationId: listCurrencies
+      summary: List currencies
+      description: |
+        Lists currencies, metals and crypto assets, ordered by `iso_code` (A→Z).
+        No matches is a normal result: `200` with `"data": []`.
+      tags: [Currencies]
+      parameters:
+        - $ref: '#/components/parameters/CurrencyType'
+        - $ref: '#/components/parameters/SearchQuery'
+        - $ref: '#/components/parameters/HasRates'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of currencies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrencyPage'
+              examples:
+                firstPage:
+                  $ref: '#/components/examples/CurrencyPageExample'
+                noMatches:
+                  $ref: '#/components/examples/EmptyPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/currencies/{code}:
+    get:
+      operationId: getCurrency
+      summary: Get one currency
+      tags: [Currencies]
+      parameters:
+        - $ref: '#/components/parameters/CurrencyCodePath'
+      responses:
+        '200':
+          description: The currency.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Currency'
+              examples:
+                usd:
+                  $ref: '#/components/examples/CurrencyUsd'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/rates:
+    get:
+      operationId: listRates
+      summary: List exchange rates
+      description: |
+        Lists stored daily rates for one base currency, newest first by default.
+        Within one date, rows are ordered by `quote` (A→Z).
+
+        Returns **400** if `base` or any of `quotes` is not a known currency, a date is
+        invalid, `from` is after `to`, or `limit` is out of range.
+        A valid filter with no stored rates (e.g. a future date range) returns `200` with
+        `"data": []`.
+      tags: [Rates]
+      parameters:
+        - $ref: '#/components/parameters/Base'
+        - $ref: '#/components/parameters/Quotes'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/RateSort'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of rates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RatePage'
+              examples:
+                eurUsd:
+                  $ref: '#/components/examples/RatePageExample'
+                noRatesInRange:
+                  $ref: '#/components/examples/EmptyPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/pairs/{base}/{quote}:
+    get:
+      operationId: getPair
+      summary: Get a pair summary and long-range trend over a time window
+      description: |
+        Summarises one pair: the latest stored rate and its change from the previous stored
+        rate, min/max/average and **trend statistics** over the chosen `window`, plus a chart
+        series (daily, or down-sampled to weekly/monthly for long windows). See ADR 0005.
+
+        **The window ends at the latest stored date** for this pair (not today), so a pair
+        that hasn't been imported recently still shows a full chart. Window lengths in
+        calendar days, counting that date: `7d` = 7, `30d` = 30, `90d` = 90, `1y` = 365,
+        `3y` = 1095, `5y` = 1825. `max` = all stored history.
+
+        **Asking for more history than exists is not an error:** the response covers what is
+        stored (`200`), `trend.period_start` shows where the data really starts, and it is
+        later than `window_start`.
+
+        Every number is computed by the server from stored daily rates with the formulas in
+        the `PairTrend` schema, so all clients show the same values. These are reference
+        rates, and past trends don't predict future rates.
+
+        Returns **404** if either currency is unknown or no rates are stored for the pair.
+      tags: [Pairs]
+      parameters:
+        - $ref: '#/components/parameters/BasePath'
+        - $ref: '#/components/parameters/QuotePath'
+        - $ref: '#/components/parameters/Window'
+        - $ref: '#/components/parameters/Interval'
+      responses:
+        '200':
+          description: The pair summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairDetail'
+              examples:
+                eurUsd30d:
+                  $ref: '#/components/examples/PairDetail30dExample'
+                eurUsd5y:
+                  $ref: '#/components/examples/PairDetail5yExample'
+                fewDaysStored:
+                  $ref: '#/components/examples/PairDetailExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/alerts:
+    post:
+      operationId: createAlert
+      summary: Create a rate alert
+      description: |
+        Creates an alert on a pair.
+
+        **Validation (422, one entry per invalid field in `errors`):**
+        - `base` and `quote` must be known currencies, and at least one rate must be stored
+          for the pair (otherwise the alert could never trigger).
+        - `quote` must differ from `base`.
+        - `condition` is `above` or `below`.
+        - `threshold` is a decimal string greater than 0 with at most 10 decimal places.
+        - `note` is at most 200 characters.
+        - Unknown fields are rejected.
+
+        **Idempotency (optional):** send an `Idempotency-Key` header to make retries safe.
+        - Same key + same body: the **stored** response is returned again (same alert,
+          `201`) with `Idempotent-Replayed: true`. No second alert is created. A replay is
+          a record of what the first request returned, not a fresh read: if the alert has
+          since been deleted, the replay still points at it and its `Location` returns `404`.
+        - Same key + different body: `422` (`/problems/idempotency-key-reused`).
+        - Same key while the first request is still running: `409`.
+        - A request that fails validation (`422`) or errors (`5xx`) stores nothing, so the
+          same key can be used again for the corrected request.
+      tags: [Alerts]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertCreate'
+            examples:
+              aboveWithNote:
+                $ref: '#/components/examples/AlertCreateExample'
+              belowNoNote:
+                $ref: '#/components/examples/AlertCreateNoNoteExample'
+      responses:
+        '201':
+          description: The alert was created (or, with `Idempotent-Replayed`, the original creation is replayed).
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              examples:
+                created:
+                  $ref: '#/components/examples/AlertExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableContent'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    get:
+      operationId: listAlerts
+      summary: List rate alerts
+      description: Lists alerts, newest first. `triggered` and `current_rate` reflect the latest stored rate at request time.
+      tags: [Alerts]
+      parameters:
+        - $ref: '#/components/parameters/AlertStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of alerts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertPage'
+              examples:
+                someAlerts:
+                  $ref: '#/components/examples/AlertPageExample'
+                noAlerts:
+                  $ref: '#/components/examples/EmptyPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/alerts/{id}:
+    get:
+      operationId: getAlert
+      summary: Get one rate alert
+      tags: [Alerts]
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      responses:
+        '200':
+          description: The alert.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              examples:
+                waiting:
+                  $ref: '#/components/examples/AlertExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    delete:
+      operationId: deleteAlert
+      summary: Delete a rate alert
+      description: Deletes the alert. Deleting it again returns 404.
+      tags: [Alerts]
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      responses:
+        '204':
+          description: The alert was deleted. There is no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  # ---------------------------------------------------------------- parameters
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of items on this page. Values outside 1–200 give 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      description: |
+        Opaque token from a previous response's `page.next_cursor`. Omit it for the first
+        page. Send the same filters as the request that produced it. An invalid cursor gives 400.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    CurrencyType:
+      name: type
+      in: query
+      description: Only return items of this type.
+      schema:
+        $ref: '#/components/schemas/CurrencyType'
+    SearchQuery:
+      name: q
+      in: query
+      description: Case-insensitive search in `iso_code` and `name` (substring match).
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 100
+      example: dollar
+    HasRates:
+      name: has_rates
+      in: query
+      description: '`true`: only currencies with at least one stored rate. `false`: only those with none. Omit for all.'
+      schema:
+        type: boolean
+    CurrencyCodePath:
+      name: code
+      in: path
+      required: true
+      description: Currency code, uppercase.
+      schema:
+        $ref: '#/components/schemas/CurrencyCode'
+    Base:
+      name: base
+      in: query
+      description: Base currency. Must be a known currency, otherwise 400.
+      schema:
+        allOf:
+          - $ref: '#/components/schemas/CurrencyCode'
+        default: EUR
+    Quotes:
+      name: quotes
+      in: query
+      description: Comma-separated quote currencies, e.g. `USD,GBP`. Each must be known, otherwise 400. Omit for all quotes.
+      style: form
+      explode: false
+      schema:
+        type: array
+        minItems: 1
+        maxItems: 50
+        items:
+          $ref: '#/components/schemas/CurrencyCode'
+      example: [USD, GBP]
+    From:
+      name: from
+      in: query
+      description: First rate date to include (inclusive). Must not be after `to`.
+      schema:
+        type: string
+        format: date
+      example: '2026-11-13'
+    To:
+      name: to
+      in: query
+      description: Last rate date to include (inclusive).
+      schema:
+        type: string
+        format: date
+      example: '2026-11-17'
+    RateSort:
+      name: sort
+      in: query
+      description: Order by rate date. Ties are broken by `quote` (A→Z).
+      schema:
+        type: string
+        enum: [date_desc, date_asc]
+        default: date_desc
+    BasePath:
+      name: base
+      in: path
+      required: true
+      description: Base currency code.
+      schema:
+        $ref: '#/components/schemas/CurrencyCode'
+    QuotePath:
+      name: quote
+      in: path
+      required: true
+      description: Quote currency code.
+      schema:
+        $ref: '#/components/schemas/CurrencyCode'
+    Window:
+      name: window
+      in: query
+      description: Length of the history window, ending at the latest stored date.
+      schema:
+        $ref: '#/components/schemas/Window'
+    Interval:
+      name: interval
+      in: query
+      description: |
+        Spacing of the points in `series`. When omitted: `day` for windows up to `1y`,
+        `week` for `3y` and `5y`, `month` for `max`. Down-sampled points use the **last
+        stored rate in each ISO week (Monday–Sunday) or calendar month**, dated on the day of
+        that rate. Only `series` is down-sampled: `stats` and `trend` always use every daily rate.
+      schema:
+        $ref: '#/components/schemas/SeriesInterval'
+    AlertStatus:
+      name: status
+      in: query
+      description: '`triggered`: only alerts whose threshold has been reached. `waiting`: only those not yet reached. Omit for all.'
+      schema:
+        type: string
+        enum: [triggered, waiting]
+    AlertId:
+      name: id
+      in: path
+      required: true
+      description: Alert id (UUID). A malformed id gives 400.
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        A unique value you generate per *intended* action (a UUID is ideal). Reuse it only
+        to retry the **same** request. See ADR 0006.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+      example: 8e03978e-40d5-43e8-bc93-6894a57f9324
+
+  # ------------------------------------------------------------------- headers
+  headers:
+    Location:
+      description: URL of the created alert.
+      required: true
+      schema:
+        type: string
+      example: /v1/alerts/3f2b8c1e-6a4d-4f7e-9b1a-2c5d8e9f0a1b
+    IdempotentReplayed:
+      description: Present (and `true`) only when this response is a replay of a stored response for the same `Idempotency-Key`.
+      required: false
+      schema:
+        type: string
+        enum: ['true']
+
+  # ----------------------------------------------------------------- responses
+  responses:
+    BadRequest:
+      description: A query or path parameter is invalid. `errors` lists each one.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            fromAfterTo:
+              $ref: '#/components/examples/ProblemBadRequest'
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            notFound:
+              $ref: '#/components/examples/ProblemNotFound'
+    IdempotencyConflict:
+      description: A request with the same `Idempotency-Key` is still being processed. Retry later.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            inProgress:
+              $ref: '#/components/examples/ProblemIdempotencyInUse'
+    UnprocessableContent:
+      description: The request body is invalid, or an `Idempotency-Key` was reused with a different body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            validationError:
+              $ref: '#/components/examples/ProblemValidation'
+            idempotencyKeyReused:
+              $ref: '#/components/examples/ProblemIdempotencyReused'
+    InternalError:
+      description: Unexpected server error. No internal details are exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            internal:
+              $ref: '#/components/examples/ProblemInternal'
+    ServiceUnavailable:
+      description: The database cannot be reached.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            databaseDown:
+              $ref: '#/components/examples/ProblemUnavailable'
+
+  # ------------------------------------------------------------------- schemas
+  schemas:
+    CurrencyCode:
+      type: string
+      description: Currency code, 3–4 uppercase letters.
+      pattern: '^[A-Z]{3,4}$'
+      examples: [USD]
+
+    CurrencyType:
+      type: string
+      enum: [currency, metal, crypto]
+
+    Window:
+      type: string
+      description: '`7d` = 7, `30d` = 30, `90d` = 90, `1y` = 365, `3y` = 1095, `5y` = 1825 calendar days; `max` = all stored history.'
+      enum: [7d, 30d, 90d, 1y, 3y, 5y, max]
+      default: 30d
+
+    SeriesInterval:
+      type: string
+      enum: [day, week, month]
+
+    PositiveDecimal:
+      type: string
+      description: |
+        An exact decimal number greater than 0, as a string. Plain notation only: no
+        exponent, no sign, no thousands separators.
+      # The (?=.*[1-9]) part means "contains at least one non-zero digit", which rules out "0" and "0.000".
+      pattern: '^(?=.*[1-9])\d+(\.\d+)?$'
+      examples: ['1.1005']
+
+    SignedDecimal:
+      type: string
+      description: An exact decimal number, as a string. May be negative. Plain notation only.
+      pattern: '^-?\d+(\.\d+)?$'
+      examples: ['-0.0029']
+
+    Threshold:
+      type: string
+      description: A decimal string greater than 0 with at most 10 decimal places, e.g. `"1.2"` or `"0.0000175"`.
+      pattern: '^(?=.*[1-9])\d+(\.\d{1,10})?$'
+      maxLength: 40
+      examples: ['1.1200']
+
+    PageInfo:
+      type: object
+      description: Pagination details. See ADR 0003.
+      required: [limit, next_cursor]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: The page size used for this response.
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page. `null` means this is the last page.
+
+    Health:
+      type: object
+      required: [status, database]
+      properties:
+        status:
+          type: string
+          const: ok
+        database:
+          type: string
+          const: ok
+
+    Currency:
+      type: object
+      required: [iso_code, name, type, iso_numeric, symbol, start_date, end_date, rates_count, latest_rate_date]
+      properties:
+        iso_code:
+          $ref: '#/components/schemas/CurrencyCode'
+        name:
+          type: string
+          examples: [United States Dollar]
+        type:
+          $ref: '#/components/schemas/CurrencyType'
+        iso_numeric:
+          type: [string, 'null']
+          description: ISO 4217 numeric code as text (keeps leading zeros). `null` for most crypto assets.
+          examples: ['840']
+        symbol:
+          type: [string, 'null']
+          examples: [$]
+        start_date:
+          type: [string, 'null']
+          format: date
+          description: First date Frankfurter has data for this currency.
+        end_date:
+          type: [string, 'null']
+          format: date
+          description: Last date Frankfurter had data for this currency at the last import.
+        rates_count:
+          type: integer
+          minimum: 0
+          description: Number of stored rates in which this currency is the base or the quote.
+        latest_rate_date:
+          type: [string, 'null']
+          format: date
+          description: Most recent stored rate date involving this currency. `null` if it has no stored rates.
+
+    CurrencyPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Currency'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+
+    Rate:
+      type: object
+      required: [rate_date, base, quote, rate, updated_at]
+      properties:
+        rate_date:
+          type: string
+          format: date
+        base:
+          $ref: '#/components/schemas/CurrencyCode'
+        quote:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate:
+          $ref: '#/components/schemas/PositiveDecimal'
+        updated_at:
+          type: string
+          format: date-time
+          description: When this rate was last inserted or changed by an import.
+
+    RatePage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rate'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+
+    RatePoint:
+      type: object
+      description: One stored rate of a pair.
+      required: [rate_date, rate]
+      properties:
+        rate_date:
+          type: string
+          format: date
+        rate:
+          $ref: '#/components/schemas/PositiveDecimal'
+
+    SeriesPoint:
+      type: object
+      description: One point of a chart series.
+      required: [date, rate]
+      properties:
+        date:
+          type: string
+          format: date
+        rate:
+          $ref: '#/components/schemas/PositiveDecimal'
+
+    PairStats:
+      type: object
+      description: Statistics over every daily rate in the window (never the down-sampled series).
+      required: [min, max, avg]
+      properties:
+        min:
+          $ref: '#/components/schemas/PositiveDecimal'
+        max:
+          $ref: '#/components/schemas/PositiveDecimal'
+        avg:
+          allOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+          description: Arithmetic mean, rounded to 10 decimal places (trailing zeros removed).
+
+    TrendMove:
+      type: object
+      description: A single-day move between two consecutive stored rates.
+      required: [date, change_pct]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Date of the later of the two rates (the day the move ended).
+        change_pct:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`(rate / previous stored rate − 1) × 100`, rounded to 4 decimal places.'
+
+    PairTrend:
+      type: object
+      description: |
+        Trend statistics over the daily rates in the window, computed by the server (ADR 0005).
+        Let `first` and `last` be the first and last stored daily rates in the window, and
+        `days` the number of calendar days between `period_start` and `period_end`.
+
+        Percentages are decimal strings rounded to **4 decimal places** (half to even).
+        Rate-valued fields keep rate precision instead: `change_abs` is exact, moving averages
+        are rounded to 10 decimal places with trailing zeros removed (like `stats.avg`), so tiny
+        rates such as 0.00029946 aren't rounded away.
+
+        A "daily return" is the move between two **consecutive stored rates**. Our data has a
+        rate for every calendar day for most currencies (weekends included); where a day is
+        missing (e.g. NGN weekends in early years) the move spans the gap.
+
+        These are reference rates. Past trends don't predict future rates.
+      required: [period_start, period_end, change_abs, change_pct, annualized_change_pct,
+                 volatility_annualized_pct, biggest_rise, biggest_fall, moving_average_30,
+                 moving_average_200]
+      properties:
+        period_start:
+          type: string
+          format: date
+          description: Date of the first stored rate in the window. Later than `window_start` when less history is stored.
+        period_end:
+          type: string
+          format: date
+          description: Date of the last stored rate in the window (= `latest.rate_date`).
+        change_abs:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`last − first`, exact.'
+        change_pct:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`(last / first − 1) × 100`.'
+        annualized_change_pct:
+          description: |
+            Compound yearly rate of change: `((last / first) ^ (365.25 / days) − 1) × 100`.
+            `null` when `days` < 365, because annualising a short period exaggerates it.
+          oneOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+            - type: 'null'
+        volatility_annualized_pct:
+          description: |
+            How much the rate typically moves, as a yearly figure:
+            `stdev(daily log returns) × √365 × 100`, where a daily log return is
+            `ln(rate / previous stored rate)` and stdev is the sample standard deviation
+            (divides by n − 1). √365 because the data has one rate per calendar day.
+            `null` when there are fewer than 20 daily returns.
+          oneOf:
+            - type: string
+              pattern: '^\d+(\.\d+)?$'
+            - type: 'null'
+        biggest_rise:
+          description: The largest positive single-day move in the window (earliest date wins a tie). `null` if no day rose (or fewer than 2 rates).
+          oneOf:
+            - $ref: '#/components/schemas/TrendMove'
+            - type: 'null'
+        biggest_fall:
+          description: The largest negative single-day move in the window (earliest date wins a tie). `null` if no day fell (or fewer than 2 rates).
+          oneOf:
+            - $ref: '#/components/schemas/TrendMove'
+            - type: 'null'
+        moving_average_30:
+          description: |
+            Average of the last 30 stored daily rates up to `period_end` (may reach back before
+            the window, so it's the same for every window). `null` if fewer than 30 are stored.
+          oneOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+            - type: 'null'
+        moving_average_200:
+          description: Same as `moving_average_30`, over the last 200 stored daily rates. `null` if fewer than 200 are stored.
+          oneOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+            - type: 'null'
+
+    PairDetail:
+      type: object
+      required: [base, quote, window, window_start, series_interval, first_available_date,
+                 data_points, latest, previous, change_abs, change_pct, stats, trend, series]
+      properties:
+        base:
+          $ref: '#/components/schemas/CurrencyCode'
+        quote:
+          $ref: '#/components/schemas/CurrencyCode'
+        window:
+          $ref: '#/components/schemas/Window'
+        window_start:
+          type: string
+          format: date
+          description: |
+            First date the window asks for: `latest.rate_date − (window days − 1)`, or
+            `first_available_date` for `max`. If `trend.period_start` is later, less history is
+            stored than the window asks for (e.g. "only 2 years of data for this pair").
+        series_interval:
+          allOf:
+            - $ref: '#/components/schemas/SeriesInterval'
+          description: The spacing actually used for `series` (the `interval` sent, or its default for this window).
+        first_available_date:
+          type: string
+          format: date
+          description: Date of the earliest rate we hold for this pair (in any window).
+        data_points:
+          type: integer
+          minimum: 1
+          description: Number of stored daily rates in the window. `stats` and `trend` are based on these.
+        latest:
+          $ref: '#/components/schemas/RatePoint'
+        previous:
+          description: The most recent stored rate before `latest`. `null` if `latest` is the only stored rate.
+          oneOf:
+            - $ref: '#/components/schemas/RatePoint'
+            - type: 'null'
+        change_abs:
+          description: '`latest.rate − previous.rate`, exact. `null` when `previous` is `null`.'
+          oneOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+            - type: 'null'
+        change_pct:
+          description: '`change_abs / previous.rate × 100`, rounded to 4 decimal places. `null` when `previous` is `null`.'
+          oneOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+            - type: 'null'
+        stats:
+          description: Min, max and average over every daily rate in the window. `null` only if the window has no rates.
+          oneOf:
+            - $ref: '#/components/schemas/PairStats'
+            - type: 'null'
+        trend:
+          description: Long-range trend over the window. `null` only if the window has no rates (it always contains `latest`, so not expected in practice).
+          oneOf:
+            - $ref: '#/components/schemas/PairTrend'
+            - type: 'null'
+        series:
+          type: array
+          description: |
+            Chart points within the window, oldest first, spaced by `series_interval`. With
+            `day`, every stored rate; with `week`/`month`, the last stored rate of each period,
+            so the final point is always `latest`. Days without a stored rate are simply absent.
+          items:
+            $ref: '#/components/schemas/SeriesPoint'
+
+    AlertCondition:
+      type: string
+      description: '`above`: triggered when the rate is ≥ threshold. `below`: triggered when the rate is ≤ threshold.'
+      enum: [above, below]
+
+    AlertCreate:
+      type: object
+      additionalProperties: false
+      required: [base, quote, condition, threshold]
+      properties:
+        base:
+          $ref: '#/components/schemas/CurrencyCode'
+        quote:
+          $ref: '#/components/schemas/CurrencyCode'
+        condition:
+          $ref: '#/components/schemas/AlertCondition'
+        threshold:
+          $ref: '#/components/schemas/Threshold'
+        note:
+          type: [string, 'null']
+          maxLength: 200
+          description: Optional free text. Leaving it out and sending `null` both mean "no note".
+
+    Alert:
+      type: object
+      required: [id, base, quote, condition, threshold, note, created_at, current_rate, triggered]
+      properties:
+        id:
+          type: string
+          format: uuid
+        base:
+          $ref: '#/components/schemas/CurrencyCode'
+        quote:
+          $ref: '#/components/schemas/CurrencyCode'
+        condition:
+          $ref: '#/components/schemas/AlertCondition'
+        threshold:
+          $ref: '#/components/schemas/Threshold'
+        note:
+          type: [string, 'null']
+          maxLength: 200
+        created_at:
+          type: string
+          format: date-time
+        current_rate:
+          description: The latest stored rate for the pair at request time. `null` if none is stored any more.
+          oneOf:
+            - $ref: '#/components/schemas/PositiveDecimal'
+            - type: 'null'
+        triggered:
+          type: boolean
+          description: Whether `current_rate` has reached `threshold` according to `condition`. `false` when `current_rate` is `null`.
+
+    AlertPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        page:
+          $ref: '#/components/schemas/PageInfo'
+
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Name of the invalid parameter or body field, as written in this contract (`body` if the whole body is unreadable).
+          examples: [threshold]
+        message:
+          type: string
+          description: A sentence a person can read under a form input.
+          examples: [Must be a number greater than 0 with at most 10 decimal places.]
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details. See ADR 0002 for the list of `type` values.
+      required: [type, title, status, detail, instance]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Identifies the kind of problem. Compare this, not `title`.
+          enum:
+            - /problems/invalid-parameters
+            - /problems/not-found
+            - /problems/method-not-allowed
+            - /problems/idempotency-key-in-use
+            - /problems/validation-error
+            - /problems/idempotency-key-reused
+            - /problems/internal-error
+            - /problems/service-unavailable
+        title:
+          type: string
+          description: Short summary, the same for every problem of this type.
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+          description: The HTTP status code.
+        detail:
+          type: string
+          description: Explanation of this specific occurrence.
+        instance:
+          type: string
+          format: uri-reference
+          description: The request path that caused the problem.
+        errors:
+          type: array
+          description: Present only on `invalid-parameters` (400) and `validation-error` (422). One entry per invalid field.
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/FieldError'
+
+  # ------------------------------------------------------------------ examples
+  # Rates and currency records below are real values from docs/samples/.
+  examples:
+    HealthOk:
+      summary: Everything is working
+      value:
+        status: ok
+        database: ok
+
+    EmptyPage:
+      summary: Nothing matched (still 200)
+      value:
+        data: []
+        page:
+          limit: 50
+          next_cursor: null
+
+    CurrencyUsd:
+      summary: US dollar
+      value:
+        iso_code: USD
+        name: United States Dollar
+        type: currency
+        iso_numeric: '840'
+        symbol: $
+        start_date: '1948-06-21'
+        end_date: '2026-11-20'
+        rates_count: 5
+        latest_rate_date: '2026-11-17'
+
+    CurrencyPageExample:
+      summary: First page of currencies, more pages available
+      value:
+        data:
+          - iso_code: BTC
+            name: Bitcoin
+            type: crypto
+            iso_numeric: null
+            symbol: ₿
+            start_date: '2010-07-18'
+            end_date: '2026-11-19'
+            rates_count: 0
+            latest_rate_date: null
+          - iso_code: EUR
+            name: Euro
+            type: currency
+            iso_numeric: '978'
+            symbol: €
+            start_date: '1999-01-01'
+            end_date: '2026-11-20'
+            rates_count: 5
+            latest_rate_date: '2026-11-17'
+        page:
+          limit: 2
+          next_cursor: eyJjIjoiRVVSIn0
+
+    RatePageExample:
+      summary: EUR → USD, newest first, limit 3
+      value:
+        data:
+          - rate_date: '2026-11-17'
+            base: EUR
+            quote: USD
+            rate: '1.1005'
+            updated_at: '2026-11-21T08:15:30Z'
+          - rate_date: '2026-11-16'
+            base: EUR
+            quote: USD
+            rate: '1.1034'
+            updated_at: '2026-11-21T08:15:30Z'
+          - rate_date: '2026-11-15'
+            base: EUR
+            quote: USD
+            rate: '1.1068'
+            updated_at: '2026-11-21T08:15:30Z'
+        page:
+          limit: 3
+          next_cursor: eyJkIjoiMjAyNi0xMS0xNSIsInEiOiJVU0QifQ
+
+    PairDetail30dExample:
+      summary: EUR/USD, 30 days, daily points (real data; series shortened to 5 of 30 points)
+      value:
+        base: EUR
+        quote: USD
+        window: 30d
+        window_start: '2026-10-28'
+        series_interval: day
+        first_available_date: '2016-01-01'
+        data_points: 30
+        latest:
+          rate_date: '2026-11-26'
+          rate: '1.0948'
+        previous:
+          rate_date: '2026-11-25'
+          rate: '1.0949'
+        change_abs: '-0.0001'
+        change_pct: '-0.0091'
+        stats:
+          min: '1.0948'
+          max: '1.1249'
+          avg: '1.1099966667'
+        trend:
+          period_start: '2026-10-28'
+          period_end: '2026-11-26'
+          change_abs: '-0.0201'
+          change_pct: '-1.8029'
+          annualized_change_pct: null
+          volatility_annualized_pct: '3.7660'
+          biggest_rise: { date: '2026-11-04', change_pct: '0.3217' }
+          biggest_fall: { date: '2026-11-12', change_pct: '-0.6532' }
+          moving_average_30: '1.1099966667'
+          moving_average_200: '1.1429305'
+        series:
+          - { date: '2026-10-28', rate: '1.1149' }
+          - { date: '2026-10-29', rate: '1.116' }
+          - { date: '2026-11-24', rate: '1.0949' }
+          - { date: '2026-11-25', rate: '1.0949' }
+          - { date: '2026-11-26', rate: '1.0948' }
+
+    PairDetail5yExample:
+      summary: EUR/USD, 5 years, weekly points (real data; series shortened to 5 of 262 points)
+      value:
+        base: EUR
+        quote: USD
+        window: 5y
+        window_start: '2021-11-28'
+        series_interval: week
+        first_available_date: '2016-01-01'
+        data_points: 1825
+        latest:
+          rate_date: '2026-11-26'
+          rate: '1.0948'
+        previous:
+          rate_date: '2026-11-25'
+          rate: '1.0949'
+        change_abs: '-0.0001'
+        change_pct: '-0.0091'
+        stats:
+          min: '0.96024'
+          max: '1.1965'
+          avg: '1.0999654904'
+        trend:
+          period_start: '2021-11-28'
+          period_end: '2026-11-26'
+          change_abs: '-0.0313'
+          change_pct: '-2.7795'
+          annualized_change_pct: '-0.5629'
+          volatility_annualized_pct: '4.9651'
+          biggest_rise: { date: '2025-04-11', change_pct: '1.6745' }
+          biggest_fall: { date: '2022-07-06', change_pct: '-1.1078' }
+          moving_average_30: '1.1099966667'
+          moving_average_200: '1.1429305'
+        series:
+          - { date: '2021-11-28', rate: '1.1261' }
+          - { date: '2021-12-05', rate: '1.1301' }
+          - { date: '2026-11-15', rate: '1.1068' }
+          - { date: '2026-11-22', rate: '1.0985' }
+          - { date: '2026-11-26', rate: '1.0948' }
+
+    PairDetailExample:
+      summary: Only 5 days stored, 7-day window (too short for annualised change, volatility or moving averages)
+      value:
+        base: EUR
+        quote: USD
+        window: 7d
+        window_start: '2026-11-11'
+        series_interval: day
+        first_available_date: '2026-11-13'
+        data_points: 5
+        latest:
+          rate_date: '2026-11-17'
+          rate: '1.1005'
+        previous:
+          rate_date: '2026-11-16'
+          rate: '1.1034'
+        change_abs: '-0.0029'
+        change_pct: '-0.2628'
+        stats:
+          min: '1.1005'
+          max: '1.1076'
+          avg: '1.1051'
+        trend:
+          period_start: '2026-11-13'
+          period_end: '2026-11-17'
+          change_abs: '-0.0071'
+          change_pct: '-0.6410'
+          annualized_change_pct: null
+          volatility_annualized_pct: null
+          biggest_rise: null
+          biggest_fall: { date: '2026-11-16', change_pct: '-0.3072' }
+          moving_average_30: null
+          moving_average_200: null
+        series:
+          - { date: '2026-11-13', rate: '1.1076' }
+          - { date: '2026-11-14', rate: '1.1072' }
+          - { date: '2026-11-15', rate: '1.1068' }
+          - { date: '2026-11-16', rate: '1.1034' }
+          - { date: '2026-11-17', rate: '1.1005' }
+
+    AlertCreateExample:
+      summary: Alert when EUR/USD reaches 1.12, with a note
+      value:
+        base: EUR
+        quote: USD
+        condition: above
+        threshold: '1.1200'
+        note: Buy dollars for the trip
+
+    AlertCreateNoNoteExample:
+      summary: Alert when EUR/USD drops to 1.09, no note
+      value:
+        base: EUR
+        quote: USD
+        condition: below
+        threshold: '1.09'
+
+    AlertExample:
+      summary: A waiting alert
+      value:
+        id: 3f2b8c1e-6a4d-4f7e-9b1a-2c5d8e9f0a1b
+        base: EUR
+        quote: USD
+        condition: above
+        threshold: '1.1200'
+        note: Buy dollars for the trip
+        created_at: '2026-11-26T10:00:00Z'
+        current_rate: '1.1005'
+        triggered: false
+
+    AlertPageExample:
+      summary: One waiting and one triggered alert
+      value:
+        data:
+          - id: 3f2b8c1e-6a4d-4f7e-9b1a-2c5d8e9f0a1b
+            base: EUR
+            quote: USD
+            condition: above
+            threshold: '1.1200'
+            note: Buy dollars for the trip
+            created_at: '2026-11-26T10:00:00Z'
+            current_rate: '1.1005'
+            triggered: false
+          - id: 9a7c2d4e-1b3f-4c5d-8e6f-0a1b2c3d4e5f
+            base: EUR
+            quote: USD
+            condition: below
+            threshold: '1.1010'
+            note: null
+            created_at: '2026-11-25T09:30:00Z'
+            current_rate: '1.1005'
+            triggered: true
+        page:
+          limit: 50
+          next_cursor: null
+
+    ProblemBadRequest:
+      summary: '`from` is after `to`'
+      value:
+        type: /problems/invalid-parameters
+        title: Invalid query or path parameters
+        status: 400
+        detail: 1 parameter is invalid.
+        instance: /v1/rates
+        errors:
+          - field: from
+            message: Must be on or before `to` (2026-11-01).
+
+    ProblemNotFound:
+      summary: Unknown currency
+      value:
+        type: /problems/not-found
+        title: Resource not found
+        status: 404
+        detail: No currency with code 'XYZ'.
+        instance: /v1/currencies/XYZ
+
+    ProblemValidation:
+      summary: Invalid alert body
+      value:
+        type: /problems/validation-error
+        title: Request body is invalid
+        status: 422
+        detail: 2 fields are invalid.
+        instance: /v1/alerts
+        errors:
+          - field: quote
+            message: Must be different from base.
+          - field: threshold
+            message: Must be a number greater than 0 with at most 10 decimal places.
+
+    ProblemIdempotencyReused:
+      summary: Same Idempotency-Key, different body
+      value:
+        type: /problems/idempotency-key-reused
+        title: Idempotency key reused with a different request
+        status: 422
+        detail: This Idempotency-Key was already used with a different request body. Use a new key for a new request.
+        instance: /v1/alerts
+
+    ProblemIdempotencyInUse:
+      summary: First request with this key is still running
+      value:
+        type: /problems/idempotency-key-in-use
+        title: Request with this idempotency key is in progress
+        status: 409
+        detail: A request with this Idempotency-Key is still being processed. Retry in a moment.
+        instance: /v1/alerts
+
+    ProblemInternal:
+      summary: Unexpected error
+      value:
+        type: /problems/internal-error
+        title: Internal server error
+        status: 500
+        detail: Something went wrong on our side. Please try again later.
+        instance: /v1/rates
+
+    ProblemUnavailable:
+      summary: Database down
+      value:
+        type: /problems/service-unavailable
+        title: Service unavailable
+        status: 503
+        detail: The database cannot be reached.
+        instance: /v1/health

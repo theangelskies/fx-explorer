@@ -9,10 +9,12 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
+    "fastapi>=0.165.0",
     "httpx>=0.28.1",
     "psycopg[binary,pool]>=3.3.9",
     "pydantic>=2.14.4",
     "pydantic-settings>=2.16.3",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
@@ -22,7 +24,9 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "pyyaml>=6.0.4",
     "respx>=0.23.1",
+    "schemathesis>=4.34.2",
 ]
 
 [tool.pytest.ini_options]

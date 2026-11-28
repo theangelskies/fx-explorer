@@ -42,6 +42,6 @@ def pool(migrated_db: str):
     """A pool on the test database, with all tables emptied before each test."""
     pool = create_pool(migrated_db)
     with pool.connection() as conn:
-        conn.execute("TRUNCATE exchange_rates, currencies, import_runs RESTART IDENTITY CASCADE")
+        conn.execute("TRUNCATE exchange_rates, currencies, import_runs, rate_alerts, idempotency_keys RESTART IDENTITY CASCADE")
     yield pool
     pool.close()
