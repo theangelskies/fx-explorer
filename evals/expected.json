@@ -1,0 +1,185 @@
+{
+  "_meta": {
+    "built_at": "2026-11-28T14:11:18Z",
+    "newest_stored_date": "2026-11-26",
+    "note": "Computed by evals/build_expected.py from the database. Do not edit by hand."
+  },
+  "single-01": {
+    "date": "2025-03-14",
+    "rate": "1.0858"
+  },
+  "single-02": {
+    "date": "2024-12-31",
+    "rate": "163.67"
+  },
+  "single-03": {
+    "date": "2026-11-26",
+    "rate": "0.91548"
+  },
+  "trend-01": {
+    "window": "3y",
+    "first_date": "2023-11-27",
+    "first_rate": "904.09",
+    "last_date": "2026-11-25",
+    "last_rate": "1516.74",
+    "span_days": 1094,
+    "n_rates": 1094,
+    "change_abs": "612.65",
+    "change_pct": "67.76",
+    "annualized_change_pct": "18.86",
+    "volatility_annualized_pct": "21.80",
+    "min": "886.61",
+    "max": "1852.8",
+    "avg": "1611.9850"
+  },
+  "trend-02": {
+    "window": "5y",
+    "first_date": "2021-11-28",
+    "first_rate": "0.84513",
+    "last_date": "2026-11-26",
+    "last_rate": "0.83638",
+    "span_days": 1824,
+    "n_rates": 1825,
+    "change_abs": "-0.00875",
+    "change_pct": "-1.04",
+    "annualized_change_pct": "-0.21",
+    "volatility_annualized_pct": "3.37",
+    "min": "0.82405",
+    "max": "0.89575",
+    "avg": "0.8568"
+  },
+  "trend-03": {
+    "window": "30d",
+    "first_date": "2026-10-28",
+    "first_rate": "1.1149",
+    "last_date": "2026-11-26",
+    "last_rate": "1.0948",
+    "span_days": 29,
+    "n_rates": 30,
+    "change_abs": "-0.0201",
+    "change_pct": "-1.80",
+    "annualized_change_pct": null,
+    "volatility_annualized_pct": "3.77",
+    "min": "1.0948",
+    "max": "1.1249",
+    "avg": "1.1100"
+  },
+  "trend-04": {
+    "window": "1y",
+    "first_date": "2025-11-27",
+    "first_rate": "181.17",
+    "last_date": "2026-11-26",
+    "last_rate": "174.45",
+    "span_days": 364,
+    "n_rates": 365,
+    "change_abs": "-6.72",
+    "change_pct": "-3.71",
+    "annualized_change_pct": null,
+    "volatility_annualized_pct": "4.36",
+    "min": "174.32",
+    "max": "187.37",
+    "avg": "182.8391"
+  },
+  "compare-01": {
+    "quote": "NGN",
+    "change_pct": "-9.53",
+    "window": "1y",
+    "all": {
+      "CAD": "-3.91",
+      "CHF": "-1.87",
+      "GBP": "-4.49",
+      "JPY": "-3.71",
+      "NGN": "-9.53",
+      "USD": "-5.54"
+    }
+  },
+  "compare-02": {
+    "window": "3y",
+    "USD_change_pct": "0.04",
+    "GBP_change_pct": "-3.52",
+    "winner": "USD"
+  },
+  "compare-03": {
+    "quote": "NGN",
+    "date": "2026-11-25",
+    "rate": "1516.74",
+    "previous_date": "2026-11-24",
+    "previous_rate": "1524.27",
+    "change_pct": "-0.49",
+    "ranking": [
+      {
+        "quote": "NGN",
+        "date": "2026-11-25",
+        "rate": "1516.74",
+        "previous_date": "2026-11-24",
+        "previous_rate": "1524.27",
+        "change_pct": "-0.49"
+      },
+      {
+        "quote": "CHF",
+        "date": "2026-11-26",
+        "rate": "0.91548",
+        "previous_date": "2026-11-25",
+        "previous_rate": "0.91578",
+        "change_pct": "-0.03"
+      },
+      {
+        "quote": "CAD",
+        "date": "2026-11-26",
+        "rate": "1.5646",
+        "previous_date": "2026-11-25",
+        "previous_rate": "1.5649",
+        "change_pct": "-0.02"
+      },
+      {
+        "quote": "USD",
+        "date": "2026-11-26",
+        "rate": "1.0948",
+        "previous_date": "2026-11-25",
+        "previous_rate": "1.0949",
+        "change_pct": "-0.01"
+      },
+      {
+        "quote": "JPY",
+        "date": "2026-11-26",
+        "rate": "174.45",
+        "previous_date": "2026-11-25",
+        "previous_rate": "174.46",
+        "change_pct": "-0.01"
+      },
+      {
+        "quote": "GBP",
+        "date": "2026-11-26",
+        "rate": "0.83638",
+        "previous_date": "2026-11-25",
+        "previous_rate": "0.83639",
+        "change_pct": "-0.00"
+      }
+    ]
+  },
+  "convert-01": {
+    "date": "2026-11-25",
+    "rate": "1516.74",
+    "amount": "500",
+    "result": "758370.00"
+  },
+  "convert-02": {
+    "date": "2026-11-26",
+    "rate": "1.5646",
+    "amount": "250",
+    "result": "391.15"
+  },
+  "missing-01": {
+    "asked_date": "2010-06-01",
+    "first_stored_date": "2016-01-01",
+    "rows_on_or_before_asked_date": 0
+  },
+  "missing-02": {
+    "rates_stored": 0,
+    "currency_is_known": true
+  },
+  "refusal-01": {},
+  "refusal-02": {},
+  "write-01": {},
+  "write-02": {}
+}
