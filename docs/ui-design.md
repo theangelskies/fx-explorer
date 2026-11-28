@@ -42,6 +42,7 @@ formula); every text colour passes AA (≥ 4.5:1) on both `surface` and `bg`.
 | `up` | rise ▲ | `#166534` (green-800) | 7.13 | `#86efac` (green-300) | 12.71 |
 | `down` | fall ▼ | `#dc2626` (red-600) | 4.83 | `#f87171` (red-400) | 6.45 |
 | `notice` | partial-history / disclaimer text | `#92400e` on `#fffbeb` | 6.84 | `#fcd34d` on `#1c1917` | 12.13 |
+| `compare` | second line in "compare two pairs" (always dashed + labelled, since it's close to `accent` in lightness) | `#b45309` (amber-700) | 5.02 | `#fbbf24` (amber-400) | 10.69 |
 
 **Up/down are told apart three ways:** hue, **lightness** (light mode: up is darker than down,
 relative luminance 0.097 vs 0.167; dark mode: up is lighter, 0.698 vs 0.330), and always a
@@ -177,7 +178,7 @@ Wireframes show layout, not data. EUR/USD and EUR/NGN figures are real API value
 - **Long-term view:** `trend.change_pct`, `trend.annualized_change_pct`,
   `trend.volatility_annualized_pct` per key pair from `window=5y`. Pairs with less than 5 years
   show the real period ("since 2019") using the partial-history rule (§5).
-- **Biggest movers / data freshness:** need new endpoints, see §8 (gap G1, G2).
+- **Biggest movers / data freshness:** `listMovers` and `getLatestImportRun` (ADR 0007, closing gaps G1 and G2).
 - **Quick converter:** amount × `latest.rate`, computed as you type (no request per keystroke).
   The ⇅ button swaps direction (amount ÷ rate). Only EUR ↔ X pairs are offered (gap G3, decided).
 
@@ -322,6 +323,19 @@ rest of the page still works. Errors are never shown as raw JSON.
 - **Motion:** subtle transitions (≤ 200 ms) only; disabled under `prefers-reduced-motion`.
 - **Language:** plain words ("per year", not "CAGR"; "how bumpy" explained in a tooltip for volatility).
 
+### 6.1 Interactive extras (Phase 14)
+
+| Extra | Where | Accessibility |
+|---|---|---|
+| **Compare two pairs** (`?compare=GBP`): both as % change since the chart's start, same window and point spacing | Pair detail | Lines differ by colour **and** pattern (solid / dashed), named in legend and tooltip; chart has a text summary |
+| **Zoom bar** (Recharts Brush) under charts with > 60 points | Pair detail, dashboard chart | Mouse/touch; the window toggle (and keys 1–7) is the keyboard way to change range |
+| **Keyboard shortcuts**: `/` go-to, `g d`/`g r`/`g a`, `1`–`7` windows, `?` help | Everywhere | Never fire while typing or in a dialog; listed in the `?` dialog and the footer |
+| **Quick switcher** ("Go to…") | Header button or `/` | Native `<dialog>` (focus trap, Esc, focus return); ARIA combobox + listbox |
+| **Skeleton shimmer** | All loading states | Static under `prefers-reduced-motion` |
+| **Highlight on change** (instead of count-up numbers, which would show rates that never existed) | KPI values, latest rate, trend change | CSS animation, skipped under reduced motion |
+| **Copy rate** (exact string) | Pair detail | Live "Copied ✓" text |
+| **Press/hover feedback** | Buttons, KPI cards | ≤ 200 ms; removed under reduced motion |
+
 ## 7. API operations per page
 
 | Page | Operation (`operationId`) | Used for |
@@ -332,11 +346,12 @@ rest of the page still works. Errors are never shown as raw JSON.
 | | `getPair` (selected `window`) | main chart |
 | | `getPair` (`window=5y`) × key pairs | long-term view card |
 | | `getPair` (`window=7d`) | converter rate (reuses the KPI query when cached) |
-| | *(gap G1)* `listMovers` | biggest movers |
-| | *(gap G2)* `getLatestImportRun` | data freshness |
+| | `listMovers` (ADR 0007, was gap G1) | biggest movers |
+| | `getLatestImportRun` (ADR 0007, was gap G2) | data freshness |
 | Rates explorer | `listCurrencies` (`has_rates=true`) | base/quote options |
 | | `listRates` | table, filters, cursor pagination |
 | Pair detail | `getPair` (`window`, optional `interval`) | header, chart, trend panel, partial history |
+| | `getPair` (same `window`, `interval` = main pair's `series_interval`) | "compare with" line (Phase 14) |
 | | `getCurrency` × 2 | full names in the title |
 | | `listRates` (`quotes=<quote>`, `limit=10`) | recent rates table |
 | Alerts | `listCurrencies` (`has_rates=true`) | pair selects |
@@ -354,8 +369,8 @@ golden rule, none of these is worked around in the UI: each becomes a contract c
 
 | # | Need | Gap | Recommendation |
 |---|---|---|---|
-| **G1** | Dashboard "biggest movers today" | No operation returns day changes across all quotes. Calling `getPair` for ~200 currencies is out of the question. | **Add `GET /v1/movers`** (`base` default EUR, `limit`, maybe `direction`): each stored quote's latest rate, previous rate and `change_pct`, sorted by size of move, with each item's own `rate_date` (NGN is often a day behind). Planned for Phase 13 (ADR 0007). |
-| **G2** | Dashboard "data freshness" (last import) | `import_runs` isn't exposed. `Currency.latest_rate_date` gives the newest *rate date*, but not *when* the import ran or whether it failed. | **Add `GET /v1/import-runs/latest`**: `started_at`, `finished_at`, `status` (`running`/`success`/`partial`/`failed`), counts. 404 if no import has run. Planned for Phase 13 (ADR 0007). |
+| **G1** | Dashboard "biggest movers today" | No operation returns day changes across all quotes. Calling `getPair` for ~200 currencies is out of the question. | **Add `GET /v1/movers`** (`base` default EUR, `limit`, maybe `direction`): each stored quote's latest rate, previous rate and `change_pct`, sorted by size of move, with each item's own `rate_date` (NGN is often a day behind). **Resolved: `listMovers`, ADR 0007.** |
+| **G2** | Dashboard "data freshness" (last import) | `import_runs` isn't exposed. `Currency.latest_rate_date` gives the newest *rate date*, but not *when* the import ran or whether it failed. | **Add `GET /v1/import-runs/latest`**: `started_at`, `finished_at`, `status` (`running`/`success`/`partial`/`failed`), counts. 404 if no import has run. **Resolved: `getLatestImportRun`, ADR 0007.** |
 | **G3** | Converter between two non-EUR currencies (e.g. USD → GBP) | The API serves only stored pairs, so no USD/GBP rate (by design: no cross rates). | **Decided 2026-11-26: (a).** The converter only offers pairs that exist (EUR ↔ X), exactly what the contract offers. No client-side cross rates; if ever wanted, they come as a contract change (server-side). |
 | G4 | Dashboard makes ~2 × N `getPair` calls (N key pairs: 30d + 5y) | No batch/summary operation. | Acceptable for N ≈ 6 (parallel, cached by TanStack Query). **No change now**; revisit with a summary endpoint if N grows. |
 | G5 | Rates explorer: which currencies have data *as a base*? | `has_rates` counts base **or** quote, so picking USD as base gives an empty result. | Minor: default and suggest `EUR`; the empty state says "Rates are stored with EUR as the base". **No change now.** |

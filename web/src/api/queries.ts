@@ -103,3 +103,23 @@ export function useAlerts(status?: AlertStatus) {
     getNextPageParam: (last) => last.page.next_cursor ?? undefined,
   });
 }
+
+export type Mover = Schemas["Mover"];
+export type ImportRun = Schemas["ImportRun"];
+
+/** listMovers (ADR 0007): the biggest day-over-day moves, biggest first. */
+export function useMovers(limit = 5) {
+  return useQuery({
+    queryKey: ["movers", limit],
+    queryFn: () => call(api.GET("/v1/movers", { params: { query: { limit } } })),
+  });
+}
+
+/** getLatestImportRun (ADR 0007): data freshness. A 404 means "no import yet". */
+export function useLatestImportRun() {
+  return useQuery({
+    queryKey: ["import-runs", "latest"],
+    queryFn: () => call(api.GET("/v1/import-runs/latest")),
+    refetchInterval: 5 * 60_000,
+  });
+}

@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import type { PairDetail } from "../api/queries";
 import { formatDate, formatDecimal } from "../lib/format";
 import { Change } from "./Change";
+import { FlashOnChange } from "./FlashOnChange";
 import { WINDOW_LABEL } from "./WindowToggle";
 
 function Missing({ reason }: { reason: string }) {
@@ -39,7 +40,9 @@ export function TrendPanel({ pair }: { pair: PairDetail }) {
     <div>
       <dl>
         <Row label={`Change (${WINDOW_LABEL[pair.window]})`}>
-          <Change pct={t.change_pct} abs={t.change_abs} />
+          <FlashOnChange value={`${pair.window}:${t.change_pct}`}>
+            <Change pct={t.change_pct} abs={t.change_abs} />
+          </FlashOnChange>
         </Row>
         <Row label="Per year">
           {t.annualized_change_pct ? <Change pct={t.annualized_change_pct} /> : <Missing reason="needs at least 1 year of data" />}

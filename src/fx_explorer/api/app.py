@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from psycopg_pool import ConnectionPool
 
 from fx_explorer.api.errors import register_error_handlers
-from fx_explorer.api.routes import alerts, currencies, health, pairs, rates
+from fx_explorer.api.routes import alerts, currencies, health, import_runs, movers, pairs, rates
 from fx_explorer.db.connection import create_pool
 
 # src/fx_explorer/api/app.py -> parents[3] is the repository root.
@@ -68,10 +68,11 @@ def create_app(pool: ConnectionPool | None = None) -> FastAPI:
     def swagger_ui() -> HTMLResponse:
         return get_swagger_ui_html(openapi_url="/openapi.yaml", title="fx-explorer API docs")
 
-    for module in (health, currencies, rates, pairs, alerts):
+    modules = (health, currencies, rates, pairs, movers, import_runs, alerts)
+    for module in modules:
         app.include_router(module.router)
     # The API's routes, kept for errors.py to build a complete Allow header on 405s.
-    app.state.api_routes = [r for m in (health, currencies, rates, pairs, alerts) for r in m.router.routes]
+    app.state.api_routes = [r for m in modules for r in m.router.routes]
     return app
 
 

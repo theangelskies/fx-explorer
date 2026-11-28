@@ -2,6 +2,7 @@
  * Pair detail (docs/ui-design.md §4.3): long-range chart, trend panel, recent rates.
  * Operations: getPair (window, interval), getCurrency ×2, listRates (recent), listCurrencies (404 help).
  */
+import { useEffect } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { ApiError, describeError } from "../api/errors";
@@ -16,14 +17,18 @@ import {
 } from "../api/queries";
 import { Card } from "../components/Card";
 import { Change } from "../components/Change";
+import { CompareChart } from "../components/CompareChart";
+import { CopyButton } from "../components/CopyButton";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
+import { FlashOnChange } from "../components/FlashOnChange";
 import { Loading, Skeleton } from "../components/Loading";
 import { Disclaimer, PartialHistoryNote } from "../components/Notices";
 import { PairChart } from "../components/PairChart";
 import { TrendPanel } from "../components/TrendPanel";
-import { WINDOW_LABEL, WindowToggle } from "../components/WindowToggle";
+import { WINDOW_LABEL, WINDOWS, WindowToggle } from "../components/WindowToggle";
 import { formatDate, formatDecimal, formatPct } from "../lib/format";
+import { shortcutAllowed } from "../lib/shortcuts";
 
 const INTERVALS: SeriesInterval[] = ["day", "week", "month"];
 
@@ -34,6 +39,7 @@ export function PairPage() {
   const window = (searchParams.get("window") ?? "30d") as Window;
   const intervalParam = searchParams.get("interval");
   const interval = (intervalParam ?? undefined) as SeriesInterval | undefined;
+  const compare = searchParams.get("compare"); // second pair to overlay, e.g. ?compare=GBP
 
   const pair = usePair(base, quote, window, interval);
   const baseInfo = useCurrency(base);
@@ -71,8 +77,10 @@ export function PairPage() {
           pair={pair.data}
           busy={pair.isPlaceholderData}
           intervalChoice={interval ?? null}
+          compare={compare}
           onWindow={(w) => setParam("window", w === "30d" ? null : w)}
           onInterval={(i) => setParam("interval", i)}
+          onCompare={(q) => setParam("compare", q)}
         />
       )}
     </>
@@ -83,12 +91,31 @@ interface PairContentProps {
   pair: PairDetail;
   busy: boolean; // showing the previous window while the new one loads
   intervalChoice: SeriesInterval | null;
+  compare: string | null;
   onWindow: (window: Window) => void;
   onInterval: (interval: SeriesInterval | null) => void;
+  onCompare: (quote: string | null) => void;
 }
 
-function PairContent({ pair, busy, intervalChoice, onWindow, onInterval }: PairContentProps) {
+function PairContent({ pair, busy, intervalChoice, compare, onWindow, onInterval, onCompare }: PairContentProps) {
   const t = pair.trend;
+  const currencies = useCurrencies({ hasRates: true });
+  const compareOptions = (currencies.data ?? [])
+    .map((c) => c.iso_code)
+    .filter((code) => code !== pair.base && code !== pair.quote);
+  // Same window and the SAME point spacing as the main pair, so the two lines line up.
+  const other = usePair(pair.base, compare ?? "", pair.window, pair.series_interval, { enabled: compare !== null });
+
+  // Shortcut: keys 1–7 pick the window (7d … max).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const index = Number(event.key) - 1;
+      if (!shortcutAllowed(event) || !Number.isInteger(index) || index < 0 || index >= WINDOWS.length) return;
+      onWindow(WINDOWS[index]!);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onWindow]);
   const chartLabel = `${pair.base}/${pair.quote}, ${WINDOW_LABEL[pair.window]}` +
     (t ? `, ${formatPct(t.change_pct, 2)}` : "");
   const movingAverages = [
@@ -101,7 +128,12 @@ function PairContent({ pair, busy, intervalChoice, onWindow, onInterval }: PairC
       {/* Latest rate and the day-over-day change (top-level change_*), labelled with its date. */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-3xl font-semibold tabular-nums">{formatDecimal(pair.latest.rate)}</p>
+          <p className="flex items-center gap-3">
+            <FlashOnChange value={pair.latest.rate}>
+              <span className="text-3xl font-semibold tabular-nums">{formatDecimal(pair.latest.rate)}</span>
+            </FlashOnChange>
+            <CopyButton value={pair.latest.rate} label={`Copy rate ${pair.latest.rate}`} />
+          </p>
           <p className="text-sm text-muted">
             {formatDate(pair.latest.rate_date)}
             {pair.change_pct && pair.previous && (
@@ -127,20 +159,51 @@ function PairContent({ pair, busy, intervalChoice, onWindow, onInterval }: PairC
               ))}
             </select>
           </label>
+          <label className="flex items-center gap-1.5 text-xs text-muted">
+            Compare with
+            <select
+              className="rounded-md border border-line-input bg-surface px-1.5 py-1 text-xs text-fg"
+              value={compare ?? ""}
+              onChange={(e) => onCompare(e.target.value || null)}
+            >
+              <option value="">nothing</option>
+              {compareOptions.map((code) => (
+                <option key={code} value={code}>{pair.base}/{code}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 
       <PartialHistoryNote pair={pair} />
 
       <Card className={`transition-opacity ${busy ? "opacity-60" : ""}`}>
-        <div aria-busy={busy}>
-          <PairChart
-            series={pair.series}
-            window={pair.window}
-            interval={pair.series_interval}
-            movingAverages={movingAverages}
-            label={chartLabel}
-          />
+        {/* key: a new window/comparison starts with the zoom bar reset */}
+        <div aria-busy={busy} key={`${pair.window}-${pair.series_interval}-${compare ?? ""}`}>
+          {compare && other.data ? (
+            <CompareChart
+              primary={{ label: `${pair.base}/${pair.quote}`, points: pair.series }}
+              secondary={{ label: `${pair.base}/${compare}`, points: other.data.series }}
+              window={pair.window}
+              interval={pair.series_interval}
+            />
+          ) : (
+            <>
+              {compare && other.isPending && <p className="mb-2 text-xs text-muted">Loading {pair.base}/{compare}…</p>}
+              {compare && other.isError && (
+                <p role="alert" className="mb-2 text-xs text-down">
+                  Can't compare with {pair.base}/{compare}: {describeError(other.error).detail}
+                </p>
+              )}
+              <PairChart
+                series={pair.series}
+                window={pair.window}
+                interval={pair.series_interval}
+                movingAverages={movingAverages}
+                label={chartLabel}
+              />
+            </>
+          )}
         </div>
       </Card>
 

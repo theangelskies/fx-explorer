@@ -45,6 +45,8 @@ tags:
     description: Daily exchange rates stored by the importer (one per day per pair, weekends included).
   - name: Pairs
     description: A summary of one currency pair over a time window, for detail views and charts.
+  - name: Imports
+    description: What the importer did and when, for "data freshness" displays.
   - name: Alerts
     description: |
       Rate alerts: "tell me when EUR/USD goes above 1.2000". An alert is *triggered* when the
@@ -217,6 +219,71 @@ paths:
                   $ref: '#/components/examples/PairDetailExample'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/movers:
+    get:
+      operationId: listMovers
+      summary: List the biggest day-over-day moves
+      description: |
+        For every quote currency stored against `base`, compares its **latest stored rate**
+        with the stored rate before it, and returns the biggest moves first (by size of
+        `change_pct`, ties by `quote` A→Z). See ADR 0007.
+
+        "Latest" is per quote: each item carries its own `rate_date`, because currencies are
+        not always updated on the same day (e.g. NGN is often a day behind).
+
+        Quotes with fewer than two stored rates are left out. A known `base` with no rates
+        gives `200` with `"data": []`. This is a ranking (top `limit`), not a paginated
+        collection, so there is no cursor.
+      tags: [Rates]
+      parameters:
+        - $ref: '#/components/parameters/Base'
+        - $ref: '#/components/parameters/MoversLimit'
+        - $ref: '#/components/parameters/MoverDirection'
+      responses:
+        '200':
+          description: The biggest moves, largest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MoverList'
+              examples:
+                eur:
+                  $ref: '#/components/examples/MoverListExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/import-runs/latest:
+    get:
+      operationId: getLatestImportRun
+      summary: Get the most recent import run
+      description: |
+        The import run that started most recently, whatever its outcome: it may still be
+        `running`, or have `failed`. Use it to show how fresh the data is. See ADR 0007.
+        Returns **404** if no import has ever run.
+      tags: [Imports]
+      responses:
+        '200':
+          description: The most recent import run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportRun'
+              examples:
+                success:
+                  $ref: '#/components/examples/ImportRunExample'
+                failed:
+                  $ref: '#/components/examples/ImportRunFailedExample'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -487,6 +554,22 @@ components:
         that rate. Only `series` is down-sampled: `stats` and `trend` always use every daily rate.
       schema:
         $ref: '#/components/schemas/SeriesInterval'
+    MoversLimit:
+      name: limit
+      in: query
+      description: How many moves to return (the biggest first). Values outside 1–50 give 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 5
+    MoverDirection:
+      name: direction
+      in: query
+      description: '`up`: only rises. `down`: only falls. Omit for both (unchanged rates included).'
+      schema:
+        type: string
+        enum: [up, down]
     AlertStatus:
       name: status
       in: query
@@ -927,6 +1010,82 @@ components:
           items:
             $ref: '#/components/schemas/SeriesPoint'
 
+    Mover:
+      type: object
+      description: One quote's latest stored rate compared with the stored rate before it.
+      required: [quote, rate_date, rate, previous_rate_date, previous_rate, change_abs, change_pct]
+      properties:
+        quote:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate_date:
+          type: string
+          format: date
+          description: Date of this quote's latest stored rate (may differ between quotes).
+        rate:
+          $ref: '#/components/schemas/PositiveDecimal'
+        previous_rate_date:
+          type: string
+          format: date
+          description: Date of the stored rate just before `rate_date`.
+        previous_rate:
+          $ref: '#/components/schemas/PositiveDecimal'
+        change_abs:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`rate − previous_rate`, exact.'
+        change_pct:
+          allOf:
+            - $ref: '#/components/schemas/SignedDecimal'
+          description: '`(rate / previous_rate − 1) × 100`, rounded to 4 decimal places (half to even).'
+
+    MoverList:
+      type: object
+      required: [base, data]
+      properties:
+        base:
+          $ref: '#/components/schemas/CurrencyCode'
+        data:
+          type: array
+          description: Biggest moves first (by absolute `change_pct`, ties by `quote`).
+          items:
+            $ref: '#/components/schemas/Mover'
+
+    ImportRun:
+      type: object
+      description: One run of the importer (`python -m fx_explorer import …`).
+      required: [id, status, started_at, finished_at, fetched, inserted, updated, rejected, error_message]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [running, success, partial, failed]
+          description: '`partial` = finished, but some records were rejected. `failed` = stopped with an error.'
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+          description: '`null` while the run is still `running`.'
+        fetched:
+          type: integer
+          minimum: 0
+          description: Rate records received from Frankfurter.
+        inserted:
+          type: integer
+          minimum: 0
+        updated:
+          type: integer
+          minimum: 0
+        rejected:
+          type: integer
+          minimum: 0
+        error_message:
+          type: [string, 'null']
+          description: Why the run failed. `null` unless `status` is `failed`.
+
     AlertCondition:
       type: string
       description: '`above`: triggered when the rate is ≥ threshold. `below`: triggered when the rate is ≤ threshold.'
@@ -1242,6 +1401,41 @@ components:
           - { date: '2026-11-15', rate: '1.1068' }
           - { date: '2026-11-16', rate: '1.1034' }
           - { date: '2026-11-17', rate: '1.1005' }
+
+    MoverListExample:
+      summary: EUR, top 3 (real data, 26 Nov 2026; NGN's latest rate is a day behind)
+      value:
+        base: EUR
+        data:
+          - { quote: NGN, rate_date: '2026-11-25', rate: '1516.74', previous_rate_date: '2026-11-24', previous_rate: '1524.27', change_abs: '-7.53', change_pct: '-0.4940' }
+          - { quote: CHF, rate_date: '2026-11-26', rate: '0.91548', previous_rate_date: '2026-11-25', previous_rate: '0.91578', change_abs: '-0.00030', change_pct: '-0.0328' }
+          - { quote: CAD, rate_date: '2026-11-26', rate: '1.5646', previous_rate_date: '2026-11-25', previous_rate: '1.5649', change_abs: '-0.0003', change_pct: '-0.0192' }
+
+    ImportRunExample:
+      summary: A successful run (real data)
+      value:
+        id: 52
+        status: success
+        started_at: '2026-11-26T00:51:59.539038Z'
+        finished_at: '2026-11-26T00:52:01.218237Z'
+        fetched: 1979
+        inserted: 0
+        updated: 0
+        rejected: 0
+        error_message: null
+
+    ImportRunFailedExample:
+      summary: A failed run
+      value:
+        id: 53
+        status: failed
+        started_at: '2026-11-27T06:00:00Z'
+        finished_at: '2026-11-27T06:00:12Z'
+        fetched: 0
+        inserted: 0
+        updated: 0
+        rejected: 0
+        error_message: 'RetriesExhaustedError: GET /rates failed after 4 attempts. Last problem: HTTP 503'
 
     AlertCreateExample:
       summary: Alert when EUR/USD reaches 1.12, with a note

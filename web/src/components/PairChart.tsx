@@ -7,6 +7,7 @@ import { useId } from "react";
 import {
   Area,
   AreaChart,
+  Brush,
   CartesianGrid,
   ReferenceLine,
   ResponsiveContainer,
@@ -32,7 +33,7 @@ interface PairChartProps {
   label: string; // accessible summary, e.g. "EUR/USD, 5 years, down 2.78%"
 }
 
-function tickFormatter(window: Window): (date: string) => string {
+export function tickFormatter(window: Window): (date: string) => string {
   const opts: Intl.DateTimeFormatOptions =
     window === "max" ? { year: "numeric" }
     : window === "1y" || window === "3y" || window === "5y" ? { month: "short", year: "2-digit" }
@@ -68,6 +69,26 @@ function ChartTooltip({ active, payload, first }: ChartTooltipProps) {
   );
 }
 
+/** Points needed before the zoom bar appears (short charts don't need it). */
+export const BRUSH_MIN_POINTS = 60;
+
+/**
+ * Props for the zoom bar under long charts: drag its handles (or the window between them) to zoom
+ * into a period. Mouse/touch only; the window toggle is the keyboard way to change the range.
+ * Used as <Brush {...brushProps(window)} /> placed DIRECTLY inside the chart (Recharts finds its
+ * parts among the chart's children).
+ */
+export function brushProps(window: Window) {
+  return {
+    dataKey: "date",
+    height: 22,
+    travellerWidth: 10,
+    stroke: "var(--accent)",
+    fill: "var(--surface)",
+    tickFormatter: tickFormatter(window),
+  };
+}
+
 export function PairChart({ series, window, interval, movingAverages = [], label }: PairChartProps) {
   const gradientId = useId();
   const data: Point[] = series.map((p) => ({ date: p.date, rate: p.rate, value: Number(p.rate) }));
@@ -77,7 +98,7 @@ export function PairChart({ series, window, interval, movingAverages = [], label
   return (
     <figure className="m-0">
       <div
-        className="h-64 w-full sm:h-80"
+        className={`w-full ${data.length > BRUSH_MIN_POINTS ? "h-72 sm:h-96" : "h-64 sm:h-80"}`}
         role="img"
         aria-label={`${label}. Chart of ${data.length} ${pointsLabel} points; details in the trend panel.`}
       >
@@ -131,10 +152,13 @@ export function PairChart({ series, window, interval, movingAverages = [], label
               activeDot={{ r: 4 }}
               isAnimationActive={false}
             />
+            {data.length > BRUSH_MIN_POINTS && <Brush {...brushProps(window)} />}
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <figcaption className="mt-1 text-right text-xs text-muted">{pointsLabel} points</figcaption>
+      <figcaption className="mt-1 text-right text-xs text-muted">
+        {pointsLabel} points{data.length > BRUSH_MIN_POINTS && " · drag the bar below the chart to zoom"}
+      </figcaption>
     </figure>
   );
 }
