@@ -61,8 +61,8 @@ Each tool is **one existing endpoint**. I checked every one in `openapi.yaml`: a
 |---|---|---|---|
 | `get_pair_trend(base, quote, window)` | `GET /v1/pairs/{base}/{quote}` (`getPair`) | `window` ∈ `7d, 30d, 90d, 1y, 3y, 5y, max` | read |
 | `list_rates(base, quotes, from, to, limit)` | `GET /v1/rates` (`listRates`) | `base`, `quotes` (comma list, ≤50), `from`, `to` (`YYYY-MM-DD`), `limit` 1–200 | read |
-| `get_movers(base)` | `GET /v1/movers` (`listMovers`) | `base` (also `limit` 1–50 and `direction` up/down exist) | read |
-| `list_currencies(q)` | `GET /v1/currencies` (`listCurrencies`) | `q` (also `type`, `has_rates`, `limit`) | read |
+| `get_movers(base)` | `GET /v1/movers` (`listMovers`) | `base`, optional `limit` 1–50 and `direction` up/down | read |
+| `list_currencies(q)` | `GET /v1/currencies` (`listCurrencies`) | `q`, optional `type` and `has_rates` | read |
 | `list_alerts(status)` | `GET /v1/alerts` (`listAlerts`) | `status` ∈ `triggered, waiting` | read |
 | `create_alert(base, quote, condition, threshold, note)` | `POST /v1/alerts` (`createAlert`) | `condition` ∈ `above, below`; `threshold` decimal string; `note` ≤200 chars | **write, confirmation required** |
 
@@ -136,7 +136,9 @@ A whole run also records: sources used, final answer, total tokens, estimated co
 
 ## 8. Settings (in `.env`)
 
-`ANTHROPIC_API_KEY` (secret, never committed or logged) · `AGENT_MODEL` (`claude-sonnet-5-5`) · `AGENT_DEV_MODEL` (`claude-haiku-5-5`, cheap manual testing) · `AGENT_MAX_STEPS` (8) · `AGENT_API_BASE_URL` (`http://localhost:8000`).
+`AGENT_PROVIDER` (`anthropic` or `openrouter`) · `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` (secrets, never committed or logged) · `AGENT_MODEL` · `AGENT_DEV_MODEL` (cheap manual testing) · `AGENT_MAX_STEPS` (8) · `AGENT_API_BASE_URL` (`http://localhost:8000`) · `AGENT_FAKE` (fake model for tests and demos).
+
+The model sits behind a small interface (`agent/model.py`), so the provider can change without touching the loop or the tools (see the 2026-11-28 update in ADR 0008). Through the API the agent also stores conversations and pending actions in PostgreSQL (ADR 0009).
 
 ## 9. Known limits (to be honest about in the UI and README)
 

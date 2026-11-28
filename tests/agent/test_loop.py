@@ -256,3 +256,10 @@ def test_the_transcript_is_json_and_saved(api, toolbox, tmp_path):
     assert saved["question"] == "what moved?" and len(saved["steps"]) == 2
     assert saved["steps"][0]["tool_calls"][0]["request"] == "GET /v1/movers?base=EUR"
     assert saved["result"]["status"] == "answered"
+
+
+def test_a_proposal_from_a_run_that_later_failed_is_dropped(api, toolbox):
+    """The model proposed an alert at step 1, then failed at step 2: the user never saw the proposal."""
+    model = FakeModel([tool_response(("create_alert", CREATE)), ModelError("The AI model is unavailable right now.")])
+    result = agent_with(model, toolbox).run("Alert me above 1.20")
+    assert result.status == "error" and result.pending_action is None

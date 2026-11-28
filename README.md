@@ -1,6 +1,6 @@
 # fx-explorer
 
-A small Python app that downloads currency exchange rates from the [Frankfurter API](https://frankfurter.dev), checks and cleans them, and stores them in a PostgreSQL database running in Docker. On top of the stored data sits a **REST API** (designed contract-first in [`openapi.yaml`](openapi.yaml)) and a **web dashboard** built only from that contract.
+A small Python app that downloads currency exchange rates from the [Frankfurter API](https://frankfurter.dev), checks and cleans them, and stores them in a PostgreSQL database running in Docker. On top of the stored data sits a **REST API** (designed contract-first in [`openapi.yaml`](openapi.yaml)), a **web dashboard** built only from that contract, and an **"Ask your data" analyst agent** that answers questions in plain English by calling that API.
 
 You can run the importer as often as you like. Importing the same data twice never creates duplicates.
 
@@ -36,6 +36,8 @@ Frankfurter API ──► client ──► parser ──► repository ──►
 | `analytics/trends.py` | Pure trend maths (change, annualised change, volatility, moving averages), exact `Decimal`. |
 | `api/` | The FastAPI app: routes, Problem Details errors, cursors, idempotency. |
 | `web/` | The React app, built only from `openapi.yaml`. |
+| `agent/` | The "Ask your data" agent: tools, prompt, the loop, the model wrapper, transcripts, CLI. |
+| `evals/` | The agent's eval set, ground truth computed with SQL, the scorer and the runner. |
 
 Each part only does its own job: the client never touches the database, the repositories never make HTTP calls, the importer contains neither SQL nor HTTP details, and the API never calls Frankfurter (it serves what the importer stored).
 
@@ -43,6 +45,7 @@ Each part only does its own job: the client never touches the database, the repo
 
 - **Importer & API:** Python 3.12 (managed with [uv](https://docs.astral.sh/uv/)), httpx, pydantic v2, psycopg 3, Alembic (plain SQL migrations), FastAPI + uvicorn, PostgreSQL 16 in Docker Compose.
 - **Tests & contract:** pytest, respx, schemathesis (property-based contract tests), PyYAML, Redocly CLI (lint + docs).
+- **Agent:** the official `anthropic` SDK (Claude) or OpenRouter's OpenAI-style API (called with httpx); the agent loop is written by hand, no agent framework.
 - **Web:** Node 22+, Vite, React, TypeScript, Tailwind CSS, React Router, TanStack Query, Recharts, openapi-typescript + openapi-fetch (types and client generated from the contract).
 
 ## Getting started
@@ -127,6 +130,12 @@ Settings live in `.env`:
 | `REQUEST_DELAY_SECONDS` | Pause between requests (default 1) |
 | `DEFAULT_BASE` | Base currency (default EUR) |
 | `DEFAULT_QUOTES` | Currencies to import by default (default USD,GBP,NGN,JPY,CHF,CAD) |
+| `AGENT_PROVIDER` | Which service runs the model: `anthropic` (default) or `openrouter` |
+| `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | **Secrets.** Only in `.env`, never committed, logged or printed |
+| `AGENT_MODEL` / `AGENT_DEV_MODEL` | Model for normal use / for the cheaper `--dev` tries (defaults `claude-sonnet-5-5` / `claude-haiku-5-5`) |
+| `AGENT_MAX_STEPS` | Safety stop: at most this many model calls per question (default 8) |
+| `AGENT_API_BASE_URL` | The API the agent's tools call (default `http://localhost:8000`) |
+| `AGENT_FAKE` | `1` = the API's agent endpoints use a fake model (tests, schemathesis, demos). Never in production |
 
 ## Week 2: API & web UI
 
@@ -174,6 +183,9 @@ All under `/v1`. Decimals are strings (`"1.0948"`) to keep exact precision ([ADR
 | GET | `/v1/alerts` | `listAlerts` | Alerts, filter `status=triggered\|waiting`; cursor pages |
 | GET | `/v1/alerts/{id}` | `getAlert` | One alert with live `current_rate` and `triggered` |
 | DELETE | `/v1/alerts/{id}` | `deleteAlert` | Delete an alert (204, then 404) |
+| POST | `/v1/agent/ask` | `askAgent` | Ask the analyst agent a question; answer, sources, steps, pending action (Week 3) |
+| POST | `/v1/agent/actions/{id}/confirm` | `confirmAgentAction` | Create the alert the agent proposed (idempotent) |
+| POST | `/v1/agent/actions/{id}/cancel` | `cancelAgentAction` | Drop the proposed alert (204) |
 
 **Idempotent alert creation** ([ADR 0006](docs/decisions/0006-idempotent-alert-creation.md)): send `Idempotency-Key: <uuid>` and retrying the same request returns the stored `201` (same alert) with `Idempotent-Replayed: true` instead of creating a duplicate; the same key with a different body gives 422, and while the first request is still running, 409.
 
@@ -190,6 +202,8 @@ All under `/v1`. Decimals are strings (`"1.0948"`) to keep exact precision ([ADR
 | [0005](docs/decisions/0005-long-range-trends.md) | Long-range windows and server-side trend statistics (volatility uses √365) |
 | [0006](docs/decisions/0006-idempotent-alert-creation.md) | Idempotent alert creation with an `Idempotency-Key` |
 | [0007](docs/decisions/0007-dashboard-endpoints.md) | Dashboard endpoints: biggest movers and latest import run |
+| [0008](docs/decisions/0008-tool-using-agent.md) | A tool-using agent: a hand-written loop over our own API (not the database, not a framework) |
+| [0009](docs/decisions/0009-agent-endpoint.md) | Agent endpoint: conversations and pending actions in PostgreSQL; confirm is idempotent |
 
 Template for new ones: [`docs/decisions/0000-template.md`](docs/decisions/0000-template.md).
 
@@ -227,7 +241,8 @@ With the API (`uv run uvicorn fx_explorer.api.app:app --reload`) and the web app
 ```bash
 uv run pytest                                   # unit, integration and in-process contract tests
 npx @redocly/cli lint openapi.yaml              # the contract: 0 errors expected
-uv run schemathesis run openapi.yaml --url http://localhost:8000   # contract tests against a running API
+uv run schemathesis run openapi.yaml --url http://localhost:8000   # contract tests against a running API (see the warning below)
+uv run pytest tests/agent tests/evals                              # the agent and the eval scorer (no API calls, no cost)
 (cd web && npm run build)                       # the web app type-checks against the contract
 ```
 
@@ -235,7 +250,7 @@ Client and parser tests use mocked HTTP responses, so they need no network. Inte
 
 `tests/api/test_contract.py` runs schemathesis in-process against every operation. [`schemathesis.toml`](schemathesis.toml) lists, with reasons, the few rules a JSON Schema can't express (a cursor must be one we issued, a currency must exist, an idempotent replay may point at a deleted alert).
 
-⚠️ A schemathesis run against your **main** database's API sends real `POST /v1/alerts` requests and leaves idempotency keys behind. Either add `--exclude-operation-id createAlert`, or run the API against the test database: `(set -a; . ./.env; set +a; DATABASE_URL="$TEST_DATABASE_URL" uv run uvicorn fx_explorer.api.app:app --port 8001)`.
+⚠️ A schemathesis run against your **main** database's API sends real `POST /v1/alerts` requests and leaves idempotency keys behind. Either add `--exclude-operation-id createAlert`, or run the API against the test database: `(set -a; . ./.env; set +a; DATABASE_URL="$TEST_DATABASE_URL" AGENT_FAKE=1 uv run uvicorn fx_explorer.api.app:app --port 8001)`. `AGENT_FAKE=1` matters: without it schemathesis would call the real language model on every `/v1/agent/ask` test.
 
 ### Looking at the data
 
@@ -272,6 +287,97 @@ SELECT rate_date, quote, prev_rate, rate,
 FROM daily WHERE prev_rate IS NOT NULL
 ORDER BY abs((rate - prev_rate) / prev_rate) DESC LIMIT 5;
 ```
+
+## Week 3: Ask your data
+
+An **analyst agent** inside the app. You ask a question in plain English ("How has EUR→NGN changed over the last 3 years?"); it decides which of **this app's own API endpoints** to call, reads the results, repeats until it has enough, and answers **with its sources**. It can also *propose* a rate alert, but it never creates one without your explicit yes. Design: [`docs/agent-design.md`](docs/agent-design.md) · decisions: [ADR 0008](docs/decisions/0008-tool-using-agent.md), [ADR 0009](docs/decisions/0009-agent-endpoint.md).
+
+### The loop
+
+The model can only **ask** for tools; our code runs them. It only knows what the tools return.
+
+```
+                 ┌──────────────────────────────────────────────┐
+                 │                                              │
+ question ─► [ model thinks ] ──text only──► ANSWER (with sources)│
+                 │   ▲                                          │
+        tool_use │   │ tool_result                              │
+                 ▼   │                                          │
+           [ our loop runs the tool ] ──HTTP──► our API ──► DB   │
+                 │                                              │
+                 └─ steps == AGENT_MAX_STEPS? ──yes──► "I couldn't finish…"
+```
+
+The code is [`agent/loop.py`](src/fx_explorer/agent/loop.py) (about 100 lines of logic). The conversation history only ever grows: earlier turns are never edited.
+
+### Tools
+
+Each tool is one existing endpoint (a test checks every tool's input schema against `openapi.yaml`, so they can't drift):
+
+| Tool | Endpoint | Kind |
+|---|---|---|
+| `get_pair_trend(base, quote, window)` | `GET /v1/pairs/{base}/{quote}` | read |
+| `list_rates(base, quotes, from, to, limit)` | `GET /v1/rates` | read |
+| `get_movers(base)` | `GET /v1/movers` | read |
+| `list_currencies(q)` | `GET /v1/currencies` | read |
+| `list_alerts(status)` | `GET /v1/alerts` | read |
+| `create_alert(base, quote, condition, threshold, note)` | `POST /v1/alerts` | **write: needs confirmation** |
+
+### Safety rules
+
+- **Every number comes from a tool result** in that conversation. Long-range statistics (changes over years, volatility…) are never computed by the model: it quotes what the API returns. Simple arithmetic (amount × rate) is allowed and must show the rate used.
+- **No writes without confirmation.** When the model calls `create_alert`, the loop does **not** run it. It records a *pending action* and tells the model "not executed, ask the user". Only a human pressing Confirm creates the alert, using the action id as the `Idempotency-Key` (a double click or retry can never create two alerts). The eval never confirms.
+- **Tools call the API over HTTP, never the database.**
+- **No predictions, no financial advice.** Trend answers say that past trends don't predict future rates.
+- **Secrets** live only in `.env`; the key is never printed, logged or stored in a transcript.
+
+### How to run
+
+```bash
+# 1. in .env: AGENT_PROVIDER=anthropic + ANTHROPIC_API_KEY, or AGENT_PROVIDER=openrouter + OPENROUTER_API_KEY
+#    and AGENT_MODEL (see Configuration). The API must be running (it is what the tools call):
+uv run uvicorn fx_explorer.api.app:app --reload
+uv run alembic upgrade head          # once: creates the agent_conversations / agent_actions tables
+
+# 2. from the terminal
+uv run python -m fx_explorer ask "How has EUR to NGN moved over the last 3 years?"
+uv run python -m fx_explorer chat --verbose --dev    # several questions; asks "Confirm? [y/N]" for alerts
+#    --verbose prints every step (tool, request, result, tokens); --dev uses AGENT_DEV_MODEL.
+#    Every run is saved as JSON in logs/agent/ (gitignored).
+
+# 3. in the web app: http://localhost:5173/ask (npm run dev in web/), or the "Ask your data" card on the dashboard
+```
+
+Over HTTP (conversation id and the pending action's id come from the answers):
+
+```bash
+curl -s -X POST localhost:8000/v1/agent/ask -H 'Content-Type: application/json' \
+  -d '{"question": "Alert me if EUR to USD goes above 1.20", "conversation_id": null}'
+curl -s -X POST localhost:8000/v1/agent/actions/<pending_action.id>/confirm     # creates the alert (201; repeating it replays the same alert)
+curl -s -X POST localhost:8000/v1/agent/actions/<pending_action.id>/cancel      # or drop it (204)
+```
+
+No key, no cost: `AGENT_FAKE=1 uv run uvicorn fx_explorer.api.app:app` serves the same endpoints with a fake model. (With a real database, confirming its pretend alert creates a real alert.)
+
+### Evaluating it
+
+[`evals/`](evals/README.md) holds 18 questions in 7 categories (single fact, trend, comparison, conversion, missing data, refusal, writes). The correct answers are **computed from the database with SQL** (`evals/build_expected.py`), not typed by hand. `evals/run.py` runs the real agent on every question (fresh conversation each, writes never confirmed) and writes a dated report to `evals/results/`.
+
+```bash
+uv run python evals/run.py --label baseline
+```
+
+**Latest score and cost: not recorded yet.** The eval harness and scorer are built and unit-tested, but no run with a real model has been done, so there is no baseline to show. When there is, it goes here: `score N/18 · cost $X.XX · report: evals/results/<file>.md`. Only the system prompt and tool descriptions may be changed to improve a score, never the expected answers.
+
+### Known limitations
+
+- **Reference rates only** (blended from central banks), not bank or card quotes, and only EUR-based pairs: there are no cross rates (USD→GBP) and no conversion endpoint.
+- **No news:** it can describe what a rate did, but not explain why.
+- **No predictions and no financial advice**, by design.
+- History in the database starts at 2016-01-01 unless you backfill further; the agent says so when you ask about earlier dates.
+- The Ask page shows time-based hints while waiting, not the agent's live steps (the API answers in one go).
+- Answer quality depends on the model. Free or small models call tools less reliably than Claude; check the sources.
+- Conversations are capped at 20 questions and are not yet deleted automatically.
 
 ## Importing safely more than once (idempotency)
 
@@ -320,14 +426,16 @@ fx-explorer/
 ├── openapi.yaml          THE API contract (OpenAPI 3.1, the source of truth)
 ├── redocly.yaml          contract lint config
 ├── schemathesis.toml     contract-test settings (with reasons)
-├── src/fx_explorer/      importer, repositories, analytics, api/ (FastAPI)
+├── src/fx_explorer/      importer, repositories, analytics, api/ (FastAPI), agent/ (Ask your data)
+├── evals/                agent eval set, expected answers (SQL), scorer, runner, results/
 ├── migrations/           Alembic database migrations (raw SQL)
 ├── tests/                unit and integration tests; tests/api/ = endpoint + contract tests
 ├── web/                  React app (built only from openapi.yaml)
 ├── docs/
 │   ├── api-design.md     API design guidelines
 │   ├── ui-design.md      UI/UX design (design system, wireframes, states)
-│   ├── decisions/        decision records (ADRs 0001–0007)
+│   ├── agent-design.md   how the agent works (loop, tools, rules, confirmation)
+│   ├── decisions/        decision records (ADRs 0001–0009)
 │   ├── frankfurter-notes.md  observed Frankfurter facts and data coverage
 │   ├── api.html          rendered contract docs
 │   └── samples/          saved real API responses
@@ -339,7 +447,7 @@ fx-explorer/
 
 ## Roadmap
 
-**Done:** importer with idempotent upserts (Week 1) · multi-year backfill · contract-first REST API with Problem Details, cursor pagination, long-range trends and idempotent alerts · web dashboard (rates explorer, pair detail with trend panel and comparison, alerts, dashboard) · contract tests with schemathesis.
+**Done:** importer with idempotent upserts (Week 1) · multi-year backfill · contract-first REST API with Problem Details, cursor pagination, long-range trends and idempotent alerts · web dashboard (rates explorer, pair detail with trend panel and comparison, alerts, dashboard) · contract tests with schemathesis · the "Ask your data" agent (Week 3: tools, hand-written loop, CLI, API endpoints, web Ask page, eval harness).
 
 **Next:**
 
@@ -352,4 +460,8 @@ fx-explorer/
 - Count skipped self-pairs in the run summary, and store reject reasons in the database instead of only in the log.
 - Update `ARCHITECTURE.md`, which still describes the Week 1 importer only.
 - Run the tests, the contract lint, schemathesis and the web build automatically in CI.
-- Week 3: an agent that reads the API's trend numbers (never computing them itself).
+- **Run the eval and improve the prompt** (Week 3, Phase 8): the harness is built and tested, but no real-model baseline has been recorded yet (needs a real API key).
+- **Live progress for the Ask page:** a streaming variant of `askAgent` (server-sent events), so the UI can show the agent's real steps (contract gap G6).
+- **Retention for agent data:** conversations and decided actions are never deleted yet; expire them (they contain users' questions).
+- Refusal fallbacks (a second model when the first declines) and prompt-cache tuning for the Anthropic provider.
+- Week 4: scheduled jobs that use the agent (for example a daily briefing as a plain workflow, not an agent).

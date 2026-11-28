@@ -102,7 +102,9 @@ class Agent:
                 status=status,
                 sources=sources,
                 steps=transcript.steps,
-                pending_action=pending,
+                # A failed run never showed its answer to the user, so a proposal made earlier in
+                # it must not be offered for confirmation either.
+                pending_action=None if status == "error" else pending,
                 usage=usage,
                 cost_usd=estimate_cost_usd(self._model.name, usage),
                 duration_ms=int((self._clock() - started) * 1000),
