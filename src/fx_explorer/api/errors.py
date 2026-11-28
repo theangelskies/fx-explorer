@@ -205,6 +205,13 @@ async def _http_handler(request: Request, exc: StarletteHTTPException) -> JSONRe
             f"{request.method} is not allowed on {request.url.path}.",
             headers={"Allow": _allowed_methods(request, (exc.headers or {}).get("Allow", ""))},
         )
+    if exc.status_code == 400 and exc.detail == "There was an error parsing the body":
+        # FastAPI's message for a body it cannot even decode (e.g. raw binary bytes sent as JSON).
+        # The contract says a bad request BODY is a 422, never a 400 (docs/api-design.md, section 4).
+        return problem_response(
+            request, "validation-error", count_detail(1, "field"),
+            [field_error("body", "Request body is not valid JSON.")],
+        )
     if exc.status_code < 500:
         return problem_response(request, "invalid-parameters", str(exc.detail))
     return problem_response(request, "internal-error", "Something went wrong on our side.")

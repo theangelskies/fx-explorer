@@ -131,3 +131,12 @@ def test_problem_types_match_contract(contract):
     """errors.py and openapi.yaml must list exactly the same problem types."""
     in_contract = set(contract["components"]["schemas"]["Problem"]["properties"]["type"]["enum"])
     assert in_contract == {f"/problems/{t}" for t in PROBLEM_TYPES}
+
+
+@pytest.mark.parametrize("path", ["/v1/alerts", "/v1/agent/ask"])
+def test_a_body_that_is_not_even_decodable_is_a_422_not_a_400(client, path):
+    resp = client.post(path, content=b"\x00\x00\x00\x00\x00", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["type"] == "/problems/validation-error"
+    assert body["errors"] == [{"field": "body", "message": "Request body is not valid JSON."}]
