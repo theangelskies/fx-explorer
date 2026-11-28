@@ -76,6 +76,10 @@ class Agent:
         self._currencies = currencies or CurrencyContext(toolbox)
         self._clock = clock
 
+    @property
+    def model_name(self) -> str:
+        return self._model.name
+
     def close(self) -> None:
         """Release the HTTP connection the tools use."""
         self._tools.close()

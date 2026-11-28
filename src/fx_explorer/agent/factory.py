@@ -23,7 +23,7 @@ def build_model(settings: Settings, dev: bool = False) -> Model:
     return AnthropicModel(model=name, api_key=key, max_retries=settings.max_retries)
 
 
-def build_agent(settings: Settings) -> Agent:
+def build_agent(settings: Settings, dev: bool = False) -> Agent:
     """An Agent for the API. With AGENT_FAKE=1 it uses the rule-based fake model."""
     toolbox = ToolBox(settings.agent_api_base_url, settings.http_timeout_seconds)
     if settings.agent_fake:
@@ -31,7 +31,7 @@ def build_agent(settings: Settings) -> Agent:
         currencies._text, currencies._fetched_at = FAKE_CURRENCIES, float("inf")  # never fetched
         return Agent(RuleBasedFakeModel(), toolbox, settings.agent_max_steps, currencies)
     try:
-        model = build_model(settings)
+        model = build_model(settings, dev)
     except ModelError:
         toolbox.close()
         raise

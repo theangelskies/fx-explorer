@@ -199,7 +199,7 @@ def expected_for(conn, truth: dict) -> dict:
     raise SystemExit(f"Unknown truth kind: {kind}")
 
 
-def main() -> None:
+def main(quiet: bool = False) -> None:
     questions = yaml.safe_load((HERE / "questions.yaml").read_text())
     ids = [q["id"] for q in questions]
     if len(ids) != len(set(ids)):
@@ -221,6 +221,8 @@ def main() -> None:
     }
     (HERE / "expected.json").write_text(json.dumps(out, indent=2) + "\n")
 
+    if quiet:
+        return
     print(f"Wrote evals/expected.json ({len(questions)} questions, data up to {newest})\n")
     for q in questions:
         e = {k: v for k, v in expected[q["id"]].items() if k not in ("ranking", "all")}
