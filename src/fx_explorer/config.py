@@ -28,7 +28,11 @@ class Settings(BaseSettings):
 
     # --- Week 3: the "Ask your data" agent ---
     # SecretStr: printing or logging the settings shows "**********", never the key.
+    # Which service runs the model: "anthropic" or "openrouter" (OpenAI-style API, many models).
+    agent_provider: str = "anthropic"
     anthropic_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     agent_model: str = "claude-sonnet-5-5"
     agent_dev_model: str = "claude-haiku-5-5"  # cheaper, for manual tries (--dev)
     agent_max_steps: int = 8
@@ -40,6 +44,14 @@ class Settings(BaseSettings):
         """Allow DEFAULT_QUOTES=USD,GBP,NGN in .env (a plain comma-separated string)."""
         if isinstance(value, str):
             return [code.strip().upper() for code in value.split(",") if code.strip()]
+        return value
+
+    @field_validator("agent_provider")
+    @classmethod
+    def _known_provider(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("anthropic", "openrouter"):
+            raise ValueError("AGENT_PROVIDER must be 'anthropic' or 'openrouter'")
         return value
 
     @field_validator("default_base")

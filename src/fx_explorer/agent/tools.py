@@ -270,6 +270,7 @@ class ToolResult:
     status: int | None = None  # HTTP status (None if no request was sent)
     is_error: bool = False
     pending_action: PendingAction | None = None
+    replayed: bool = False  # confirm(): the API said "this key was already used": same alert
 
 
 # ------------------------------------------------------------------ the executor
@@ -364,6 +365,41 @@ class ToolBox:
             "Do not say the alert exists."
         )
         return ToolResult(content=text, pending_action=action)
+
+    # -- the ONLY code that really creates an alert: called by a human's Confirm, never by the loop
+    def confirm(self, action: PendingAction) -> ToolResult:
+        """Run a pending create_alert for real. The action id is the Idempotency-Key (ADR 0006):
+        clicking Confirm twice, or retrying after a timeout, returns the SAME alert."""
+        if action.status != "pending":
+            return _error(f"Error: this action is already {action.status}; nothing was done.")
+        source = "POST /v1/alerts"
+        try:
+            response = self._client.post(
+                "/v1/alerts", json=action.input, headers={"Idempotency-Key": action.id}
+            )
+        except httpx.HTTPError as exc:  # stays pending: the user can press Confirm again safely
+            return _error(
+                f"Error: could not reach the API ({type(exc).__name__}). Nothing was created; "
+                "you can confirm again.",
+                source=source,
+            )
+        if response.status_code == 201:
+            action.status = "confirmed"
+            alert = response.json()
+            replayed = response.headers.get("Idempotent-Replayed") == "true"
+            return ToolResult(
+                content=json.dumps(_trim_alert(alert), separators=(",", ":")),
+                source=source,
+                status=201,
+                replayed=replayed,
+            )
+        return ToolResult(
+            content=_problem_text(response), source=source, status=response.status_code, is_error=True
+        )
+
+    def cancel(self, action: PendingAction) -> None:
+        if action.status == "pending":
+            action.status = "cancelled"
 
     # -- shared HTTP plumbing
     def _get(self, path: str, params: dict[str, Any], trim) -> ToolResult:
@@ -558,21 +594,22 @@ def _trim_currencies(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trim_alert(a: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": a["id"],
+        "pair": f"{a['base']}/{a['quote']}",
+        "condition": a["condition"],
+        "threshold": a["threshold"],
+        "note": a["note"],
+        "created_at": a["created_at"],
+        "current_rate": a["current_rate"],
+        "triggered": a["triggered"],
+    }
+
+
 def _trim_alerts(d: dict[str, Any]) -> dict[str, Any]:
     return {
         "count": len(d["data"]),
         "more_results_exist": d["page"]["next_cursor"] is not None,
-        "alerts": [
-            {
-                "id": a["id"],
-                "pair": f"{a['base']}/{a['quote']}",
-                "condition": a["condition"],
-                "threshold": a["threshold"],
-                "note": a["note"],
-                "created_at": a["created_at"],
-                "current_rate": a["current_rate"],
-                "triggered": a["triggered"],
-            }
-            for a in d["data"]
-        ],
+        "alerts": [_trim_alert(a) for a in d["data"]],
     }

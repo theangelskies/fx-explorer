@@ -14,6 +14,7 @@ import logging
 import sys
 from collections.abc import Sequence
 
+from fx_explorer.agent import cli as agent_cli
 from fx_explorer.config import get_settings
 from fx_explorer.db.connection import create_pool
 from fx_explorer.frankfurter.client import FrankfurterClient, FrankfurterError
@@ -38,6 +39,7 @@ def _codes(text: str) -> list[str]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fx_explorer", description="Frankfurter rates importer")
     sub = parser.add_subparsers(dest="command", required=True)
+    agent_cli.add_parsers(sub)
 
     imp = sub.add_parser("import", help="download rates and store them in PostgreSQL")
     imp.add_argument("--base", help="base currency (default: DEFAULT_BASE from .env)")
@@ -90,6 +92,9 @@ def print_backfill_summary(summary: BackfillSummary, base: str, quotes: Sequence
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command in ("ask", "chat"):  # the "Ask your data" agent (Week 3)
+        return agent_cli.run(args)
 
     # Options that cannot be combined.
     if args.incremental and (args.date or args.start or args.end):

@@ -31,3 +31,7 @@ Constraints: every number must be traceable to our data; the author is learning,
 - **Harder / costs:** each question costs tokens (several model calls); behaviour is less predictable than a workflow, so we need the eval set and must re-run it after prompt changes; every new API capability needs a tool description written for the model.
 - **Limits we accept:** the agent can only answer what our endpoints expose. There is no cross-rate or conversion endpoint, and `/v1/movers` only covers the latest day, so some questions need several calls or an honest "I can't".
 - **Remember:** the model's text is never a source of truth. Numbers come from tool results, and the system prompt, the tool descriptions and the evals exist to keep it that way.
+
+## Update 2026-11-28: a second model provider (OpenRouter)
+
+The model sits behind the small `Model` interface (decision 6), so the provider can change without touching the loop or the tools. `AGENT_PROVIDER` selects `anthropic` (the official SDK, the default) or `openrouter` (OpenRouter's OpenAI-style chat-completions API, called with `httpx`, no new dependency). `OpenRouterModel` only translates our Anthropic-style messages to the OpenAI format and back, with the same retry rules. Consequences: free OpenRouter models can be used for development and evals at no cost, but they may be slower, rate-limited and weaker at tool use than Claude models, so eval scores are only comparable within one model. Prompts and questions are sent to OpenRouter and the model's own provider.

@@ -278,3 +278,68 @@ def test_invalid_alerts_are_rejected_before_anything_is_proposed(api, tools, cha
     result = tools.run("create_alert", args)
     assert result.is_error and result.pending_action is None and message in result.content
     assert len(api.calls) == 0
+
+
+# ------------------------------------------------------------------ confirm / cancel (the only real write)
+
+ALERT = {"id": "7f0c1d6e-0000-4000-8000-000000000001", "base": "EUR", "quote": "USD", "condition": "above",
+         "threshold": "1.2", "note": None, "created_at": "2026-11-28T08:00:00Z", "current_rate": "1.0948",
+         "triggered": False}
+
+
+def pending(tools):
+    return tools.run("create_alert", {"base": "EUR", "quote": "USD", "condition": "above", "threshold": "1.20"}).pending_action
+
+
+def test_confirm_posts_with_the_action_id_as_idempotency_key(api, tools):
+    route = api.post("/v1/alerts").respond(201, json=ALERT)
+    action = pending(tools)
+    result = tools.confirm(action)
+    request = last_request(route)
+    assert request.headers["Idempotency-Key"] == action.id
+    assert json.loads(request.content) == {"base": "EUR", "quote": "USD", "condition": "above", "threshold": "1.20", "note": None}
+    assert result.status == 201 and not result.is_error and not result.replayed
+    assert json.loads(result.content)["id"] == ALERT["id"]
+    assert action.status == "confirmed"
+
+
+def test_confirming_twice_sends_nothing_the_second_time(api, tools):
+    route = api.post("/v1/alerts").respond(201, json=ALERT)
+    action = pending(tools)
+    tools.confirm(action)
+    again = tools.confirm(action)
+    assert again.is_error and "already confirmed" in again.content
+    assert route.call_count == 1
+
+
+def test_a_retry_with_the_same_key_is_reported_as_a_replay(api, tools):
+    api.post("/v1/alerts").respond(201, json=ALERT, headers={"Idempotent-Replayed": "true"})
+    assert tools.confirm(pending(tools)).replayed is True
+
+
+def test_a_network_failure_keeps_the_action_pending_so_confirm_can_be_retried(api, tools):
+    route = api.post("/v1/alerts")
+    route.side_effect = [httpx.ConnectError("down"), httpx.Response(201, json=ALERT)]
+    action = pending(tools)
+    first = tools.confirm(action)
+    assert first.is_error and action.status == "pending" and "confirm again" in first.content
+    assert tools.confirm(action).status == 201
+    keys = {c.request.headers["Idempotency-Key"] for c in route.calls}
+    assert keys == {action.id}                      # same key on the retry: can never double-create
+
+
+def test_api_rejection_becomes_an_error_and_nothing_is_confirmed(api, tools):
+    api.post("/v1/alerts").mock(return_value=problem(422, "Invalid", "1 field is invalid.", [{"field": "quote", "message": "Unknown currency."}]))
+    action = pending(tools)
+    result = tools.confirm(action)
+    assert result.is_error and result.status == 422 and "quote: Unknown currency." in result.content
+    assert action.status == "pending"
+
+
+def test_a_cancelled_action_can_never_be_confirmed(api, tools):
+    route = api.post("/v1/alerts").respond(201, json=ALERT)
+    action = pending(tools)
+    tools.cancel(action)
+    assert action.status == "cancelled"
+    assert "already cancelled" in tools.confirm(action).content
+    assert route.call_count == 0

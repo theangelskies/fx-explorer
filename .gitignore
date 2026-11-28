@@ -20,3 +20,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Agent run transcripts (contain questions and answers)
+logs/
