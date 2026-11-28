@@ -7,12 +7,14 @@ every message at once:
 """
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Response
 from fastapi.responses import JSONResponse
+from psycopg import Connection
 from psycopg_pool import ConnectionPool
 from pydantic import ValidationError
 
@@ -104,7 +106,33 @@ def create_alert(
         return _out(alert)
 
     # With a key (ADR 0006): replay, 409 or 422 happen inside begin().
-    replay = idempotency.begin(keys, idempotency_key, payload,
+    result = create_alert_idempotently(payload, idempotency_key, alerts=alerts, currencies=currencies,
+                                       rates=rates, keys=keys, pool=pool)
+    if isinstance(result, JSONResponse):
+        return result  # a stored replay
+    response.headers["Location"] = _location(result.id)
+    return result
+
+
+def create_alert_idempotently(
+    payload: Any,
+    key: str,
+    *,
+    alerts: AlertRepository,
+    currencies: CurrencyRepository,
+    rates: RateRepository,
+    keys: IdempotencyRepository,
+    pool: ConnectionPool,
+    in_transaction: Callable[[Connection, AlertOut], None] | None = None,
+) -> AlertOut | JSONResponse:
+    """POST /v1/alerts with an Idempotency-Key. Returns the new alert, or a JSONResponse that is
+    the stored replay. Also used by POST /v1/agent/actions/{id}/confirm (ADR 0009).
+
+    `in_transaction(conn, alert)` runs inside the SAME transaction as the insert and the stored
+    response: the confirm endpoint uses it to mark its action confirmed, so "alert exists" and
+    "action confirmed" can never disagree. If it raises, nothing is saved and the key is freed.
+    """
+    replay = idempotency.begin(keys, key, payload,
                                location_for=lambda stored: _location(stored["id"]))
     if replay is not None:
         return replay
@@ -116,12 +144,13 @@ def create_alert(
             alert = alerts.create(base=body.base, quote=body.quote, condition=body.condition,
                                   threshold=body.threshold, note=body.note, conn=conn)
             out = _out(alert)
-            keys.complete(idempotency_key, 201, out.model_dump(mode="json"), conn=conn)
+            if in_transaction is not None:
+                in_transaction(conn, out)
+            keys.complete(key, 201, out.model_dump(mode="json"), conn=conn)
     except BaseException:
         # Validation error or crash: nothing was stored, so free the key for a retry.
-        keys.release(idempotency_key)
+        keys.release(key)
         raise
-    response.headers["Location"] = _location(alert.id)
     return out
 
 

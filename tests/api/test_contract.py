@@ -9,7 +9,9 @@ because an unbuilt endpoint returns a 404 the contract doesn't promise.
 import pytest
 import schemathesis
 
+from fx_explorer.agent.factory import build_agent
 from fx_explorer.api.app import create_app
+from fx_explorer.config import get_settings
 from tests.api.conftest import seed
 
 pytestmark = pytest.mark.integration
@@ -18,13 +20,17 @@ IMPLEMENTED = [
     "getHealth", "listCurrencies", "getCurrency", "listRates", "getPair",
     "listMovers", "getLatestImportRun",
     "createAlert", "listAlerts", "getAlert", "deleteAlert",
+    "askAgent", "confirmAgentAction", "cancelAgentAction",
 ]
 
 
 @pytest.fixture
 def api_schema(pool):
     seed(pool)  # real currencies and rates, so valid requests can find data
-    app = create_app(pool=pool)
+    # The agent endpoints run on the rule-based fake model (AGENT_FAKE): schemathesis must never
+    # call a real model.
+    agent = build_agent(get_settings().model_copy(update={"agent_fake": True}))
+    app = create_app(pool=pool, agent=agent)
     # Load the contract through the app itself (GET /openapi.yaml): this also proves the
     # app serves exactly the file schemathesis tests against.
     return schemathesis.openapi.from_asgi("/openapi.yaml", app)

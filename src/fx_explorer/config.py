@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     agent_model: str = "claude-sonnet-5-5"
     agent_dev_model: str = "claude-haiku-5-5"  # cheaper, for manual tries (--dev)
     agent_max_steps: int = 8
+    # AGENT_FAKE=1: the API's agent endpoints use a rule-based fake model (no key, no cost).
+    # For schemathesis and demos. Never set it in production.
+    agent_fake: bool = False
     agent_api_base_url: str = "http://localhost:8000"  # the agent calls OUR API here
 
     @field_validator("default_quotes", mode="before")

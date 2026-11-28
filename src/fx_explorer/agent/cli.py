@@ -22,7 +22,8 @@ from typing import Any
 import httpx
 
 from fx_explorer.agent.loop import Agent, AgentResult
-from fx_explorer.agent.model import AnthropicModel, Model, ModelError, OpenRouterModel
+from fx_explorer.agent.factory import build_model
+from fx_explorer.agent.model import Model, ModelError
 from fx_explorer.agent.tools import PendingAction, ToolBox
 from fx_explorer.config import Settings, get_settings
 
@@ -81,15 +82,7 @@ def run(
 
 
 def _real_model(settings: Settings, dev: bool) -> Model:
-    name = settings.agent_dev_model if dev else settings.agent_model
-    if settings.agent_provider == "openrouter":
-        key = settings.openrouter_api_key.get_secret_value() if settings.openrouter_api_key else None
-        return OpenRouterModel(
-            model=name, api_key=key, base_url=settings.openrouter_base_url,
-            max_retries=settings.max_retries,
-        )
-    key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
-    return AnthropicModel(model=name, api_key=key, max_retries=settings.max_retries)
+    return build_model(settings, dev)
 
 
 def _api_is_up(base_url: str) -> bool:

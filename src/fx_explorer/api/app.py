@@ -19,6 +19,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from psycopg_pool import ConnectionPool
 
 from fx_explorer.api.errors import register_error_handlers
+from fx_explorer.agent.loop import Agent
+from fx_explorer.api.routes import agent as agent_routes
 from fx_explorer.api.routes import alerts, currencies, health, import_runs, movers, pairs, rates
 from fx_explorer.db.connection import create_pool
 
@@ -26,27 +28,32 @@ from fx_explorer.db.connection import create_pool
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "openapi.yaml"
 
 
-def create_app(pool: ConnectionPool | None = None) -> FastAPI:
+def create_app(pool: ConnectionPool | None = None, agent: Agent | None = None) -> FastAPI:
     """Build the app.
 
     pool=None (normal use): open a pool on DATABASE_URL at startup, close it at shutdown.
     pool given (tests): use it as is; whoever created it closes it.
+    agent given (tests): the agent endpoints use it (with a FakeModel). Otherwise the agent is
+    built on first use from the settings (AGENT_FAKE=1 gives a fake model, no key needed).
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if pool is not None:
-            app.state.pool = pool
-            yield
-            return
-        # wait=False: start even if the DB is down (health then reports 503).
-        # timeout=5: a request waits at most 5 s for a DB connection before giving up.
-        own_pool = create_pool(max_size=10, wait=False, timeout=5)
-        app.state.pool = own_pool
+        own_pool = None
         try:
+            if pool is not None:
+                app.state.pool = pool
+            else:
+                # wait=False: start even if the DB is down (health then reports 503).
+                # timeout=5: a request waits at most 5 s for a DB connection before giving up.
+                own_pool = create_pool(max_size=10, wait=False, timeout=5)
+                app.state.pool = own_pool
             yield
         finally:
-            own_pool.close()
+            if own_pool is not None:
+                own_pool.close()
+            if getattr(app.state, "agent_owned", False):  # an agent we built: close its HTTP client
+                app.state.agent.close()
 
     app = FastAPI(
         title="fx-explorer API",
@@ -57,6 +64,8 @@ def create_app(pool: ConnectionPool | None = None) -> FastAPI:
     )
     if pool is not None:
         app.state.pool = pool  # also available when a test client skips the lifespan
+    if agent is not None:
+        app.state.agent = agent
 
     register_error_handlers(app)
 
@@ -68,7 +77,7 @@ def create_app(pool: ConnectionPool | None = None) -> FastAPI:
     def swagger_ui() -> HTMLResponse:
         return get_swagger_ui_html(openapi_url="/openapi.yaml", title="fx-explorer API docs")
 
-    modules = (health, currencies, rates, pairs, movers, import_runs, alerts)
+    modules = (health, currencies, rates, pairs, movers, import_runs, alerts, agent_routes)
     for module in modules:
         app.include_router(module.router)
     # The API's routes, kept for errors.py to build a complete Allow header on 405s.

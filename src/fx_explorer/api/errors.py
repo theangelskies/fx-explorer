@@ -28,6 +28,7 @@ PROBLEM_TYPES: dict[str, tuple[int, str]] = {
     "not-found": (404, "Resource not found"),
     "method-not-allowed": (405, "Method not allowed"),
     "idempotency-key-in-use": (409, "Request with this idempotency key is in progress"),
+    "conflict": (409, "Request conflicts with the current state"),
     "validation-error": (422, "Request body is invalid"),
     "idempotency-key-reused": (422, "Idempotency key reused with a different request"),
     "internal-error": (500, "Internal server error"),
@@ -122,6 +123,8 @@ def _friendly_message(err: dict[str, Any]) -> str:
         from fx_explorer.api.params import CODE_MESSAGE, CODE_PATTERN, DATE_MESSAGE, DATE_PATTERN
 
         pattern = ctx.get("pattern")
+        if pattern == r"\S":  # the agent's question: at least one non-space character
+            return "Must contain some text."
         if pattern == CODE_PATTERN:
             return CODE_MESSAGE
         if pattern == DATE_PATTERN:

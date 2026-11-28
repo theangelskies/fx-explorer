@@ -248,3 +248,84 @@ class ImportRunOut(BaseModel):
     updated: int
     rejected: int
     error_message: str | None
+
+
+# --------------------------------------------------------------------- agent (ADR 0009)
+
+class AgentAskIn(BaseModel):
+    """#/components/schemas/AgentAskRequest"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    conversation_id: UUID | None = None
+
+
+class AgentSourceOut(BaseModel):
+    """#/components/schemas/AgentSource"""
+
+    label: str
+    request: str
+
+
+class AgentToolCallOut(BaseModel):
+    """#/components/schemas/AgentToolCall"""
+
+    tool: str
+    input: dict[str, Any]
+    request: str | None
+    status: int | str | None
+    result_summary: str
+    is_error: bool
+    duration_ms: int
+
+
+class AgentStepOut(BaseModel):
+    """#/components/schemas/AgentStep"""
+
+    step: int
+    model_text: str
+    tool_calls: list[AgentToolCallOut]
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+
+
+class AgentAlertOut(BaseModel):
+    """The proposed alert: #/components/schemas/AlertCreate (threshold stays the text the agent gave)."""
+
+    base: str
+    quote: str
+    condition: AlertCondition
+    threshold: str
+    note: str | None
+
+
+class AgentPendingActionOut(BaseModel):
+    """#/components/schemas/AgentPendingAction"""
+
+    id: UUID
+    tool: Literal["create_alert"]
+    status: Literal["pending", "confirmed", "cancelled"]
+    alert: AgentAlertOut
+
+
+class AgentUsageOut(BaseModel):
+    """#/components/schemas/AgentUsage"""
+
+    input_tokens: int
+    output_tokens: int
+    cost_usd: str | None
+    duration_ms: int
+
+
+class AgentAnswerOut(BaseModel):
+    """#/components/schemas/AgentAnswer"""
+
+    conversation_id: UUID
+    answer: str
+    status: Literal["answered", "max_steps", "refused"]
+    sources: list[AgentSourceOut]
+    steps: list[AgentStepOut]
+    pending_action: AgentPendingActionOut | None
+    usage: AgentUsageOut

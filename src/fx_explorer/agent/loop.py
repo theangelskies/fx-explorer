@@ -44,6 +44,7 @@ class AgentResult:
     usage: Usage
     cost_usd: float | None
     duration_ms: int
+    error: str | None = None  # status "error": why the model could not be used (safe to show)
     messages: list[dict[str, Any]] = field(repr=False, default_factory=list)  # for follow-ups
     transcript: Transcript | None = field(repr=False, default=None)
 
@@ -75,6 +76,10 @@ class Agent:
         self._currencies = currencies or CurrencyContext(toolbox)
         self._clock = clock
 
+    def close(self) -> None:
+        """Release the HTTP connection the tools use."""
+        self._tools.close()
+
     def run(self, question: str, history: list[dict[str, Any]] | None = None) -> AgentResult:
         """Answer one question. For a follow-up, pass the previous result's `messages`."""
         started = self._clock()
@@ -87,7 +92,7 @@ class Agent:
         sources: list[str] = []
         pending: PendingAction | None = None
 
-        def finish(answer: str, status: str) -> AgentResult:
+        def finish(answer: str, status: str, error: str | None = None) -> AgentResult:
             return AgentResult(
                 answer=answer,
                 status=status,
@@ -97,6 +102,7 @@ class Agent:
                 usage=usage,
                 cost_usd=estimate_cost_usd(self._model.name, usage),
                 duration_ms=int((self._clock() - started) * 1000),
+                error=error,
                 messages=messages,
                 transcript=transcript,
             )

@@ -53,6 +53,13 @@ tags:
       latest stored rate has reached its threshold. Creating an alert supports an optional
       `Idempotency-Key` header so retries never create duplicates (ADR 0006).
 
+  - name: Agent
+    description: |
+      "Ask your data": a tool-using analyst agent. It answers questions in plain English by
+      calling this API's own read endpoints, and cites its sources. It can **propose** a rate
+      alert, but never creates one by itself: the proposal is a *pending action* that a person
+      confirms or cancels here (ADR 0008, ADR 0009).
+
 paths:
   /v1/health:
     get:
@@ -429,6 +436,141 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
+  /v1/agent/ask:
+    post:
+      operationId: askAgent
+      summary: Ask the analyst agent a question
+      description: |
+        Sends a question in plain English. The agent decides which read endpoints of this API to
+        call (rates, pair trends, movers, currencies, alerts), reads the results, and answers.
+        Every number in `answer` comes from a tool result, and the requests behind it are listed
+        in `sources`. `steps` is the full record of what the agent did.
+
+        **Conversations.** Leave `conversation_id` out (or `null`) to start a new conversation;
+        the response returns its id. Send that id with the next question to continue it. A
+        conversation holds at most 20 questions.
+
+        **Writes need a human.** If the user asks for an alert, the agent only *proposes* it:
+        the response has a `pending_action` and nothing has been created. Call
+        `confirmAgentAction` to create it or `cancelAgentAction` to drop it.
+
+        A question the agent could not finish within its step limit is still `200`, with
+        `status: max_steps` and what it found so far.
+
+        **Errors:** `422` for an empty (or whitespace-only) or too long question, or a
+        conversation that is full; `404` for an unknown `conversation_id`; `409` if the
+        conversation was changed by another request while this one was running (ask again);
+        `503` if the language model or the API the agent reads is unavailable.
+
+        These are reference rates. The agent does not predict rates or give financial advice.
+      tags: [Agent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentAskRequest'
+            examples:
+              newConversation:
+                value:
+                  question: How has EUR to NGN changed over the last 3 years?
+                  conversation_id: null
+      responses:
+        '200':
+          description: The agent's answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAnswer'
+              examples:
+                answered:
+                  $ref: '#/components/examples/AgentAnswerExample'
+                proposedAlert:
+                  $ref: '#/components/examples/AgentAnswerPendingExample'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableContent'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/agent/actions/{id}/confirm:
+    post:
+      operationId: confirmAgentAction
+      summary: Confirm a pending action (create the proposed alert)
+      description: |
+        The user said yes. Creates the alert the agent proposed, using the action id as the
+        `Idempotency-Key` of `POST /v1/alerts` (ADR 0006), so a double click or a retry can never
+        create two alerts.
+
+        - **Pending**: the alert is created: `201` with the new alert and a `Location` header.
+        - **Already confirmed**: the stored `201` is returned again (same alert) with
+          `Idempotent-Replayed: true`. Nothing new is created. This makes a retry after a lost
+          response safe.
+        - **Cancelled**: `409`.
+
+        The alert is validated like any other (`422` with `errors` if, for example, the pair has
+        no stored rates any more); the action then stays pending.
+      tags: [Agent]
+      parameters:
+        - $ref: '#/components/parameters/ActionId'
+      responses:
+        '201':
+          description: The alert was created (or, with `Idempotent-Replayed`, it already had been).
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              examples:
+                created:
+                  $ref: '#/components/examples/AlertExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableContent'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/agent/actions/{id}/cancel:
+    post:
+      operationId: cancelAgentAction
+      summary: Cancel a pending action
+      description: |
+        The user said no. The action is marked cancelled and nothing is created. Cancelling an
+        action that is already cancelled is fine (`204` again). If the action was already
+        **confirmed**, the alert exists: `409` (delete it with `DELETE /v1/alerts/{id}`).
+      tags: [Agent]
+      parameters:
+        - $ref: '#/components/parameters/ActionId'
+      responses:
+        '204':
+          description: The action is cancelled. There is no response body.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
 components:
   # ---------------------------------------------------------------- parameters
   parameters:
@@ -585,6 +727,14 @@ components:
       schema:
         type: string
         format: uuid
+    ActionId:
+      name: id
+      in: path
+      required: true
+      description: The id of a pending action (`pending_action.id` in an agent answer).
+      schema:
+        type: string
+        format: uuid
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -662,8 +812,17 @@ components:
           examples:
             internal:
               $ref: '#/components/examples/ProblemInternal'
+    Conflict:
+      description: The request clashes with the current state (for example, confirming a cancelled action).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            actionCancelled:
+              $ref: '#/components/examples/ProblemActionCancelled'
     ServiceUnavailable:
-      description: The database cannot be reached.
+      description: A dependency is down - the database, or (agent endpoints) the language model or the API the agent reads.
       content:
         application/problem+json:
           schema:
@@ -1150,6 +1309,157 @@ components:
         page:
           $ref: '#/components/schemas/PageInfo'
 
+    AgentAskRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          pattern: '\S'
+          description: The question, in any language. Must contain at least one non-space character.
+          examples: ['How has EUR to NGN changed over the last 3 years?']
+        conversation_id:
+          type: [string, 'null']
+          format: uuid
+          description: Continue this conversation. `null` or omitted starts a new one.
+
+    AgentAnswer:
+      type: object
+      required: [conversation_id, answer, status, sources, steps, pending_action, usage]
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        answer:
+          type: string
+          description: The agent's answer, in the user's language.
+        status:
+          type: string
+          enum: [answered, max_steps, refused]
+          description: |
+            `answered`: a normal answer. `max_steps`: the agent hit its step limit; `answer` says what it found so far.
+            `refused`: the model declined the request.
+        sources:
+          type: array
+          description: The successful API requests the answer is based on, in the order they were made.
+          items:
+            $ref: '#/components/schemas/AgentSource'
+        steps:
+          type: array
+          description: Everything the agent did, one entry per model call. For a "How I got this" view.
+          items:
+            $ref: '#/components/schemas/AgentStep'
+        pending_action:
+          description: A proposed write waiting for the user, or `null`. Nothing has been created yet.
+          oneOf:
+            - $ref: '#/components/schemas/AgentPendingAction'
+            - type: 'null'
+        usage:
+          $ref: '#/components/schemas/AgentUsage'
+
+    AgentSource:
+      type: object
+      required: [label, request]
+      properties:
+        label:
+          type: string
+          description: A short name for a link or chip.
+          examples: [EUR/NGN trend (3y)]
+        request:
+          type: string
+          description: The API request that produced the data.
+          examples: ['GET /v1/pairs/EUR/NGN?window=3y']
+
+    AgentStep:
+      type: object
+      required: [step, model_text, tool_calls, input_tokens, output_tokens, duration_ms]
+      properties:
+        step:
+          type: integer
+          minimum: 1
+        model_text:
+          type: string
+          description: Text the model wrote in this step (often empty when it only called tools).
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentToolCall'
+        input_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        duration_ms:
+          type: integer
+          minimum: 0
+          description: Time the model call took.
+
+    AgentToolCall:
+      type: object
+      required: [tool, input, request, status, result_summary, is_error, duration_ms]
+      properties:
+        tool:
+          type: string
+          examples: [get_pair_trend]
+        input:
+          type: object
+          additionalProperties: true
+          description: The arguments the model gave the tool.
+        request:
+          type: [string, 'null']
+          description: The API request made, e.g. `GET /v1/movers?base=EUR`. `null` when no request was made (a proposed write).
+        status:
+          type: [integer, string, 'null']
+          description: The HTTP status of `request`, or the string `pending` for a proposed write. `null` if no response came back.
+        result_summary:
+          type: string
+          description: The start of what the tool returned, on one line.
+        is_error:
+          type: boolean
+        duration_ms:
+          type: integer
+          minimum: 0
+
+    AgentPendingAction:
+      type: object
+      required: [id, tool, status, alert]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Pass this to the confirm or cancel endpoint. It is also the `Idempotency-Key` used to create the alert.
+        tool:
+          type: string
+          enum: [create_alert]
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled]
+        alert:
+          $ref: '#/components/schemas/AlertCreate'
+
+    AgentUsage:
+      type: object
+      required: [input_tokens, output_tokens, cost_usd, duration_ms]
+      properties:
+        input_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: [string, 'null']
+          pattern: '^\d+(\.\d+)?$'
+          description: Estimated model cost in US dollars, as a decimal string. `null` if the model's price is unknown. A free model gives `"0.000000"`.
+        duration_ms:
+          type: integer
+          minimum: 0
+          description: Total time for the whole question.
+
     FieldError:
       type: object
       required: [field, message]
@@ -1177,6 +1487,7 @@ components:
             - /problems/not-found
             - /problems/method-not-allowed
             - /problems/idempotency-key-in-use
+            - /problems/conflict
             - /problems/validation-error
             - /problems/idempotency-key-reused
             - /problems/internal-error
@@ -1545,6 +1856,89 @@ components:
         status: 409
         detail: A request with this Idempotency-Key is still being processed. Retry in a moment.
         instance: /v1/alerts
+
+    ProblemActionCancelled:
+      summary: Confirming a cancelled action
+      value:
+        type: /problems/conflict
+        title: Request conflicts with the current state
+        status: 409
+        detail: This action was cancelled, so it can no longer be confirmed. Ask the agent again.
+        instance: /v1/agent/actions/0b8f2f0e-6c3a-4a53-9a55-5d2d1f0c9d11/confirm
+
+    AgentAnswerExample:
+      summary: A trend question
+      value:
+        conversation_id: 3c1f5a52-7a43-4d3e-bf0c-0e7a8d9f4b21
+        answer: "EUR/NGN rose 67.76% between 2023-11-27 and 2026-11-25 (904.09 to 1516.74). Past trends don't predict future rates."
+        status: answered
+        sources:
+          - label: EUR/NGN trend (3y)
+            request: GET /v1/pairs/EUR/NGN?window=3y
+        steps:
+          - step: 1
+            model_text: ''
+            tool_calls:
+              - tool: get_pair_trend
+                input: {base: EUR, quote: NGN, window: 3y}
+                request: GET /v1/pairs/EUR/NGN?window=3y
+                status: 200
+                result_summary: '{"base":"EUR","quote":"NGN","window":"3y","window_start":"2023-11-27", ...'
+                is_error: false
+                duration_ms: 41
+            input_tokens: 1840
+            output_tokens: 52
+            duration_ms: 1210
+          - step: 2
+            model_text: "EUR/NGN rose 67.76% between 2023-11-27 and 2026-11-25 (904.09 to 1516.74). Past trends don't predict future rates."
+            tool_calls: []
+            input_tokens: 2610
+            output_tokens: 61
+            duration_ms: 1480
+        pending_action: null
+        usage:
+          input_tokens: 4450
+          output_tokens: 113
+          cost_usd: '0.010030'
+          duration_ms: 2790
+
+    AgentAnswerPendingExample:
+      summary: The agent proposed an alert (nothing created yet)
+      value:
+        conversation_id: 3c1f5a52-7a43-4d3e-bf0c-0e7a8d9f4b21
+        answer: 'I can create this alert: EUR/USD above 1.20. Please confirm.'
+        status: answered
+        sources: []
+        steps:
+          - step: 1
+            model_text: ''
+            tool_calls:
+              - tool: create_alert
+                input: {base: EUR, quote: USD, condition: above, threshold: '1.20'}
+                request: null
+                status: pending
+                result_summary: 'NOT EXECUTED. No alert has been created. A pending action ...'
+                is_error: false
+                duration_ms: 0
+            input_tokens: 1790
+            output_tokens: 40
+            duration_ms: 980
+          - step: 2
+            model_text: 'I can create this alert: EUR/USD above 1.20. Please confirm.'
+            tool_calls: []
+            input_tokens: 2100
+            output_tokens: 20
+            duration_ms: 700
+        pending_action:
+          id: 0b8f2f0e-6c3a-4a53-9a55-5d2d1f0c9d11
+          tool: create_alert
+          status: pending
+          alert: {base: EUR, quote: USD, condition: above, threshold: '1.20', note: null}
+        usage:
+          input_tokens: 3890
+          output_tokens: 60
+          cost_usd: '0.008380'
+          duration_ms: 1700
 
     ProblemInternal:
       summary: Unexpected error

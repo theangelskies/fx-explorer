@@ -403,3 +403,32 @@ def tool_response(*calls: tuple[str, dict[str, Any]], text: str = "", n: int = 0
         usage=Usage(input_tokens=100, output_tokens=30),
         model="fake-model",
     )
+
+
+class RuleBasedFakeModel:
+    """The model used when AGENT_FAKE=1 (schemathesis, API tests, demos with no key or cost).
+
+    Unlike FakeModel it needs no script: its behaviour is a pure function of the conversation,
+    so it works for any number of requests, in any order.
+      * the question mentions "alert"  -> it proposes EUR/USD above 1.20 (a pending action);
+      * the question is "[fake-error]" -> the model "fails" (the API answers 503);
+      * anything else                   -> a plain fake answer, no tools.
+    It never calls the API, so no network is needed.
+    """
+
+    name = "fake-model"
+
+    def complete(
+        self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> ModelResponse:
+        last = messages[-1]["content"]
+        if isinstance(last, list):  # tool results just came back: wrap up
+            return text_response("I can create this alert: EUR/USD above 1.20. Please confirm.")
+        text = last.lower()
+        if "[fake-error]" in text:
+            raise ModelError("The fake model was asked to fail.")
+        if "alert" in text:
+            return tool_response(
+                ("create_alert", {"base": "EUR", "quote": "USD", "condition": "above", "threshold": "1.20"})
+            )
+        return text_response("This is a fake answer. Past trends don't predict future rates.")
