@@ -128,6 +128,7 @@ sign, colour) · `<Rate value>` (formats a decimal string) · `<WindowToggle>` �
 | `/rates` | Rates explorer | `?base=EUR&quotes=USD,GBP&from=…&to=…&sort=date_desc` |
 | `/pairs/:base/:quote` | Pair detail | `?window=5y` (and `interval` if the user overrides it) |
 | `/alerts` | Alerts | `?status=triggered` |
+| `/ask` | Ask your data | n/a (the conversation lives on the server) |
 
 On mobile the nav collapses into a menu button; the theme toggle stays visible.
 
@@ -293,6 +294,48 @@ The long-range view for informed decisions.
 
 ---
 
+### 4.5 Ask your data (`/ask`, and a compact panel on the dashboard)
+
+A chat with the analyst agent ([ADR 0008](decisions/0008-tool-using-agent.md), [ADR 0009](decisions/0009-agent-endpoint.md)).
+
+```
+┌ Ask your data ──────────────────────────────────────────── [New conversation] ┐
+│                                         ┌──────────────────────────────────┐   │
+│                                         │ How has EUR→NGN changed over 3y? │   │  your question
+│                                         └──────────────────────────────────┘   │
+│ ┌────────────────────────────────────────────────────────────────────────┐     │
+│ │ EUR/NGN rose 67.76% between 27 Nov 2023 and 25 Nov 2026 …              │     │  answer
+│ │ Sources  (EUR/NGN trend (3y))  ← chip, opens the pair page             │     │
+│ │ ⓘ Reference rates. Past trends don't predict future rates.             │     │  trend note
+│ │ ▸ How I got this (1 lookup)                                            │     │  <details>
+│ └────────────────────────────────────────────────────────────────────────┘     │
+│ ┌ Proposed alert · not created yet ──────────────────────────────────────┐     │
+│ │ Alert me when EUR/USD goes above 1.20          [Confirm] [Cancel]      │     │  pending action
+│ └────────────────────────────────────────────────────────────────────────┘     │
+│ [ Ask about the stored rates…                                      ] [Send]    │
+└────────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Empty:** a short explanation of what it can and can't do, plus starter questions (click to send).
+- **Thinking:** a status line with animated dots that changes over time ("Reading your question…" →
+  "Checking EUR→NGN…" → "Comparing the numbers…" → "Still working…"). The API answers in one go, so these
+  words come from the **question** (currencies it mentions) and the **clock**, not from the agent's real steps.
+  Live progress would need a streaming operation (see gap G6).
+- **Answer:** plain text, **source chips** (each is the API request behind a number; a chip opens the matching
+  Pair page or Rates page with the same window/filters, Movers → Dashboard, Alerts → Alerts, others are
+  labels only), the trend disclaimer whenever the agent used `get_pair_trend`, and a collapsible
+  **How I got this** (per step: tool, request, status, short result, tokens, estimated cost).
+  `status: max_steps` and `refused` get a short note.
+- **Pending action:** a card that says plainly it is **not created yet**, shows pair, condition, threshold and
+  note, with **Confirm** and **Cancel**. Buttons are disabled while a request runs; the API also makes confirming
+  idempotent, so a double click can't create two alerts. After Confirm: "✓ Alert created" with a link to Alerts
+  (and "already existed" when the API replayed). After Cancel: "Cancelled. No alert was created."
+- **Error:** the Problem's title and detail with **Retry** (the failed question is sent again). A `404` for the
+  conversation (the API forgot it) makes the retry start a new conversation.
+- **Dashboard panel:** an input and three starter questions; sending navigates to `/ask` with the question.
+- **Keyboard:** Enter sends, Shift+Enter adds a line, `g` then `k` goes to the page. 1,000 characters max
+  (a counter appears at 800). The thread is an `aria-live` log.
+
 ## 5. States (every view)
 
 | State | What the user sees | When |
@@ -359,6 +402,10 @@ rest of the page still works. Errors are never shown as raw JSON.
 | | `createAlert` (+ `Idempotency-Key`) | form submit, 422 field errors |
 | | `listAlerts` (`status`, `cursor`) | list, tabs, "Load more" |
 | | `deleteAlert` | delete |
+| Ask | `askAgent` | send a question; answer, sources, steps, pending action |
+| | `confirmAgentAction` / `cancelAgentAction` | the Confirm / Cancel buttons |
+| | `listCurrencies` (`has_rates=true`) | only to word the "Checking EUR→…" hint |
+| Dashboard panel | (none) | hands the question to the Ask page |
 
 `getAlert` isn't needed by any page (the list holds everything); it stays available for links.
 
@@ -374,6 +421,8 @@ golden rule, none of these is worked around in the UI: each becomes a contract c
 | **G3** | Converter between two non-EUR currencies (e.g. USD → GBP) | The API serves only stored pairs, so no USD/GBP rate (by design: no cross rates). | **Decided 2026-11-26: (a).** The converter only offers pairs that exist (EUR ↔ X), exactly what the contract offers. No client-side cross rates; if ever wanted, they come as a contract change (server-side). |
 | G4 | Dashboard makes ~2 × N `getPair` calls (N key pairs: 30d + 5y) | No batch/summary operation. | Acceptable for N ≈ 6 (parallel, cached by TanStack Query). **No change now**; revisit with a summary endpoint if N grows. |
 | G5 | Rates explorer: which currencies have data *as a base*? | `has_rates` counts base **or** quote, so picking USD as base gives an empty result. | Minor: default and suggest `EUR`; the empty state says "Rates are stored with EUR as the base". **No change now.** |
+
+| G6 | Ask page: live progress while the agent works | `askAgent` answers once, when finished, so the UI cannot show the agent's real steps as they happen. | Time- and question-based hints for now (§4.5). **Later:** a streaming variant (server-sent events), with a contract change and ADR first. |
 
 Everything else the pages need is already in the contract, including partial history
 (`window_start` vs `trend.period_start`), chart spacing (`series_interval`) and alert badges

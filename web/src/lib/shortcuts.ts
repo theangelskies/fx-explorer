@@ -19,6 +19,7 @@ export const SHORTCUTS: { keys: string[]; what: string }[] = [
   { keys: ["g", "d"], what: "Dashboard" },
   { keys: ["g", "r"], what: "Rates explorer" },
   { keys: ["g", "a"], what: "Alerts" },
+  { keys: ["g", "k"], what: "Ask your data" },
   { keys: ["1", "…", "7"], what: "Pair detail: switch window (7d … max)" },
   { keys: ["?"], what: "Show this help" },
   { keys: ["Esc"], what: "Close a dialog" },

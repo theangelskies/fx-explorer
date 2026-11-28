@@ -11,9 +11,10 @@ const NAV = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/rates", label: "Rates", end: false },
   { to: "/alerts", label: "Alerts", end: false },
+  { to: "/ask", label: "Ask", end: false },
 ];
 
-const GO_TO: Record<string, string> = { d: "/", r: "/rates", a: "/alerts" };
+const GO_TO: Record<string, string> = { d: "/", r: "/rates", a: "/alerts", k: "/ask" };
 
 function Kbd({ children }: { children: string }) {
   return <kbd className="rounded border border-line-input px-1.5 py-0.5 font-mono text-[11px]">{children}</kbd>;

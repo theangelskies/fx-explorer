@@ -15,6 +15,7 @@ export const router = createBrowserRouter([
       { index: true, lazy: () => import("./pages/DashboardPage").then((m) => ({ Component: m.DashboardPage })) },
       { path: "rates", lazy: () => import("./pages/RatesPage").then((m) => ({ Component: m.RatesPage })) },
       { path: "pairs/:base/:quote", lazy: () => import("./pages/PairPage").then((m) => ({ Component: m.PairPage })) },
+      { path: "ask", lazy: () => import("./pages/AskPage").then((m) => ({ Component: m.AskPage })) },
       { path: "alerts", lazy: () => import("./pages/AlertsPage").then((m) => ({ Component: m.AlertsPage })) },
       { path: "*", element: <NotFoundPage /> },
     ],

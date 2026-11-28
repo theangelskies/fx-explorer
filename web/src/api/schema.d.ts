@@ -240,6 +240,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agent/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the analyst agent a question
+         * @description Sends a question in plain English. The agent decides which read endpoints of this API to
+         *     call (rates, pair trends, movers, currencies, alerts), reads the results, and answers.
+         *     Every number in `answer` comes from a tool result, and the requests behind it are listed
+         *     in `sources`. `steps` is the full record of what the agent did.
+         *
+         *     **Conversations.** Leave `conversation_id` out (or `null`) to start a new conversation;
+         *     the response returns its id. Send that id with the next question to continue it. A
+         *     conversation holds at most 20 questions.
+         *
+         *     **Writes need a human.** If the user asks for an alert, the agent only *proposes* it:
+         *     the response has a `pending_action` and nothing has been created. Call
+         *     `confirmAgentAction` to create it or `cancelAgentAction` to drop it.
+         *
+         *     A question the agent could not finish within its step limit is still `200`, with
+         *     `status: max_steps` and what it found so far.
+         *
+         *     **Errors:** `422` for an empty (or whitespace-only) or too long question, or a
+         *     conversation that is full; `404` for an unknown `conversation_id`; `409` if the
+         *     conversation was changed by another request while this one was running (ask again);
+         *     `503` if the language model or the API the agent reads is unavailable.
+         *
+         *     These are reference rates. The agent does not predict rates or give financial advice.
+         */
+        post: operations["askAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent/actions/{id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a pending action (create the proposed alert)
+         * @description The user said yes. Creates the alert the agent proposed, using the action id as the
+         *     `Idempotency-Key` of `POST /v1/alerts` (ADR 0006), so a double click or a retry can never
+         *     create two alerts.
+         *
+         *     - **Pending**: the alert is created: `201` with the new alert and a `Location` header.
+         *     - **Already confirmed**: the stored `201` is returned again (same alert) with
+         *       `Idempotent-Replayed: true`. Nothing new is created. This makes a retry after a lost
+         *       response safe.
+         *     - **Cancelled**: `409`.
+         *
+         *     The alert is validated like any other (`422` with `errors` if, for example, the pair has
+         *     no stored rates any more); the action then stays pending.
+         */
+        post: operations["confirmAgentAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent/actions/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a pending action
+         * @description The user said no. The action is marked cancelled and nothing is created. Cancelling an
+         *     action that is already cancelled is fine (`204` again). If the action was already
+         *     **confirmed**, the alert exists: `409` (delete it with `DELETE /v1/alerts/{id}`).
+         */
+        post: operations["cancelAgentAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -541,6 +635,95 @@ export interface components {
             data: components["schemas"]["Alert"][];
             page: components["schemas"]["PageInfo"];
         };
+        AgentAskRequest: {
+            /**
+             * @description The question, in any language. Must contain at least one non-space character.
+             * @example How has EUR to NGN changed over the last 3 years?
+             */
+            question: string;
+            /**
+             * Format: uuid
+             * @description Continue this conversation. `null` or omitted starts a new one.
+             */
+            conversation_id?: string | null;
+        };
+        AgentAnswer: {
+            /** Format: uuid */
+            conversation_id: string;
+            /** @description The agent's answer, in the user's language. */
+            answer: string;
+            /**
+             * @description `answered`: a normal answer. `max_steps`: the agent hit its step limit; `answer` says what it found so far.
+             *     `refused`: the model declined the request.
+             * @enum {string}
+             */
+            status: "answered" | "max_steps" | "refused";
+            /** @description The successful API requests the answer is based on, in the order they were made. */
+            sources: components["schemas"]["AgentSource"][];
+            /** @description Everything the agent did, one entry per model call. For a "How I got this" view. */
+            steps: components["schemas"]["AgentStep"][];
+            /** @description A proposed write waiting for the user, or `null`. Nothing has been created yet. */
+            pending_action: components["schemas"]["AgentPendingAction"] | null;
+            usage: components["schemas"]["AgentUsage"];
+        };
+        AgentSource: {
+            /**
+             * @description A short name for a link or chip.
+             * @example EUR/NGN trend (3y)
+             */
+            label: string;
+            /**
+             * @description The API request that produced the data.
+             * @example GET /v1/pairs/EUR/NGN?window=3y
+             */
+            request: string;
+        };
+        AgentStep: {
+            step: number;
+            /** @description Text the model wrote in this step (often empty when it only called tools). */
+            model_text: string;
+            tool_calls: components["schemas"]["AgentToolCall"][];
+            input_tokens: number;
+            output_tokens: number;
+            /** @description Time the model call took. */
+            duration_ms: number;
+        };
+        AgentToolCall: {
+            /** @example get_pair_trend */
+            tool: string;
+            /** @description The arguments the model gave the tool. */
+            input: {
+                [key: string]: unknown;
+            };
+            /** @description The API request made, e.g. `GET /v1/movers?base=EUR`. `null` when no request was made (a proposed write). */
+            request: string | null;
+            /** @description The HTTP status of `request`, or the string `pending` for a proposed write. `null` if no response came back. */
+            status: number | string | null;
+            /** @description The start of what the tool returned, on one line. */
+            result_summary: string;
+            is_error: boolean;
+            duration_ms: number;
+        };
+        AgentPendingAction: {
+            /**
+             * Format: uuid
+             * @description Pass this to the confirm or cancel endpoint. It is also the `Idempotency-Key` used to create the alert.
+             */
+            id: string;
+            /** @enum {string} */
+            tool: "create_alert";
+            /** @enum {string} */
+            status: "pending" | "confirmed" | "cancelled";
+            alert: components["schemas"]["AlertCreate"];
+        };
+        AgentUsage: {
+            input_tokens: number;
+            output_tokens: number;
+            /** @description Estimated model cost in US dollars, as a decimal string. `null` if the model's price is unknown. A free model gives `"0.000000"`. */
+            cost_usd: string | null;
+            /** @description Total time for the whole question. */
+            duration_ms: number;
+        };
         FieldError: {
             /**
              * @description Name of the invalid parameter or body field, as written in this contract (`body` if the whole body is unreadable).
@@ -560,7 +743,7 @@ export interface components {
              * @description Identifies the kind of problem. Compare this, not `title`.
              * @enum {string}
              */
-            type: "/problems/invalid-parameters" | "/problems/not-found" | "/problems/method-not-allowed" | "/problems/idempotency-key-in-use" | "/problems/validation-error" | "/problems/idempotency-key-reused" | "/problems/internal-error" | "/problems/service-unavailable";
+            type: "/problems/invalid-parameters" | "/problems/not-found" | "/problems/method-not-allowed" | "/problems/idempotency-key-in-use" | "/problems/conflict" | "/problems/validation-error" | "/problems/idempotency-key-reused" | "/problems/internal-error" | "/problems/service-unavailable";
             /** @description Short summary, the same for every problem of this type. */
             title: string;
             /** @description The HTTP status code. */
@@ -622,7 +805,16 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The database cannot be reached. */
+        /** @description The request clashes with the current state (for example, confirming a cancelled action). */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description A dependency is down - the database, or (agent endpoints) the language model or the API the agent reads. */
         ServiceUnavailable: {
             headers: {
                 [name: string]: unknown;
@@ -694,6 +886,8 @@ export interface components {
         AlertStatus: "triggered" | "waiting";
         /** @description Alert id (UUID). A malformed id gives 400. */
         AlertId: string;
+        /** @description The id of a pending action (`pending_action.id` in an agent answer). */
+        ActionId: string;
         /**
          * @description A unique value you generate per *intended* action (a UUID is ideal). Reuse it only
          *     to retry the **same** request. See ADR 0006.
@@ -1068,6 +1262,92 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    askAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentAskRequest"];
+            };
+        };
+        responses: {
+            /** @description The agent's answer. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAnswer"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["UnprocessableContent"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    confirmAgentAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id of a pending action (`pending_action.id` in an agent answer). */
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The alert was created (or, with `Idempotent-Replayed`, it already had been). */
+            201: {
+                headers: {
+                    Location: components["headers"]["Location"];
+                    "Idempotent-Replayed": components["headers"]["IdempotentReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["UnprocessableContent"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    cancelAgentAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id of a pending action (`pending_action.id` in an agent answer). */
+                id: components["parameters"]["ActionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The action is cancelled. There is no response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };

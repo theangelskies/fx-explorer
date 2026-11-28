@@ -5,6 +5,7 @@
  */
 import { describeError } from "../api/errors";
 import { useCurrencies } from "../api/queries";
+import { AskPanel } from "../components/ask/AskPanel";
 import { Converter, Freshness, KpiCard, LongTermCard, MainChart, MoversCard } from "../components/dashboard/DashboardCards";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorState } from "../components/ErrorState";
@@ -46,6 +47,7 @@ export function DashboardPage() {
               <LongTermCard quotes={quotes} />
             </div>
             <div className="space-y-4">
+              <AskPanel />
               <MoversCard />
               <Converter quotes={quotes} />
             </div>
